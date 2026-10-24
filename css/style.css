@@ -449,3 +449,81 @@ button {
   min-height: 32px;
 }
 .split-bar button.primary { background: var(--accent); border-color: var(--accent); color: #FFFFFF; }
+
+/* ---- プレイリスト ---- */
+
+/* 表示中の帯（‹ 曲順｜プレイリスト名｜◀ 曲名（2/10） ▶） */
+.play-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: #EAF1FF;
+  border-bottom: 1px solid var(--border);
+}
+.play-bar[hidden] { display: none; }
+.play-bar button {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  min-height: 32px;
+  white-space: nowrap;
+}
+.play-bar button:disabled { opacity: 0.35; cursor: default; }
+.play-bar .play-list { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30%; }
+.play-bar .play-title {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (pointer: coarse) {
+  .play-bar button { min-height: 40px; padding: 6px 16px; }
+}
+@media (max-width: 600px) {
+  .play-bar .play-list { display: none; }
+}
+
+/* 一覧の中の補足（曲数）・番号・見つからない曲 */
+.dlg-body .song-sub { margin-left: 10px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.dlg-body .song-num {
+  min-width: 28px;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.dlg-body .song-missing { margin-left: 10px; color: #C00000; font-size: 12px; }
+.dlg-body .song-tool:disabled { opacity: 0.3; cursor: default; }
+.dlg-body .pl-play {
+  display: block;
+  width: 100%;
+  margin: 2px 0 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #FFFFFF;
+  font-weight: 700;
+  text-align: left;
+}
+
+/* 曲を追加：選んだ順の番号 */
+.dlg-body .pick-list .song-open { display: flex; align-items: center; justify-content: space-between; }
+.dlg-body .pick-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid #B8BEC8;
+  font-size: 12px;
+  font-weight: 700;
+  flex: none;
+}
+.dlg-body .song.picked .pick-num { background: var(--accent); border-color: var(--accent); color: #FFFFFF; }

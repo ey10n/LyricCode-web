@@ -6,7 +6,7 @@
   const { Editor, Text, UI, PdfImport, Sheet, Cloud, Library } = LC;
 
   /** 画面に出す版の番号。公開し直すときは sw.js の CACHE と同じ番号に上げる */
-  const APP_VERSION = 'v5';
+  const APP_VERSION = 'v6';
 
   const MODE_NAMES = { lyric: '歌詞編集', chord: 'コード編集', both: '歌詞＋コード編集', view: '閲覧' };
   const MODE_KEYS = ['lyric', 'chord', 'both', 'view'];
@@ -30,6 +30,7 @@
   const importInput = document.getElementById('importInput');
   let currentId = '';      // 開いている曲
   let fileHandle = null;   // 上書き保存に使うファイル（対応ブラウザのみ。開いている曲をファイルにも書くとき）
+  let playing = null;      // プレイリストを表示中なら { id, index, prevMode }
 
   function currentSong() {
     return library.get(currentId);
@@ -43,7 +44,8 @@
   // ---- 表示の更新 ----
 
   function updateCaption() {
-    const s = songName();
+    // プレイリストを表示中は「曲名（2/10）」
+    const s = playing ? playTitle() : songName();
     titleEl.textContent = s;
     document.title = s + ' - LyricCode';
   }
@@ -80,7 +82,9 @@
   function saveSettings() {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-        mode: editor.mode, freeText: editor.freeText, fontSize: editor.fontSize, splitEnabled: editor.splitEnabled,
+        // プレイリストの表示中は閲覧になっているので、その前のモードを覚える
+        mode: playing ? playing.prevMode : editor.mode,
+        freeText: editor.freeText, fontSize: editor.fontSize, splitEnabled: editor.splitEnabled,
       }));
     } catch (e) { /* 無視 */ }
   }
@@ -130,6 +134,7 @@
   }
 
   function newSong(name, text, style) {
+    leavePlaylist();
     const s = library.add(name, text || '', style || {});
     openSong(s.id);
     return s;
@@ -229,6 +234,8 @@
         statusEl.textContent = '開いていた曲は、他の端末で削除されました';
       }
     }
+    // 他の端末でプレイリストが変わった（曲順・削除）ときは、表示中の帯を合わせる
+    if (playing) updatePlayBar();
     updateCaption();
     if (songListRefresh) songListRefresh();
   }
@@ -333,6 +340,7 @@
 
   /** ファイルを曲として曲の一覧に加えて開く（同じ名前の曲があれば、置き換えるか別の曲にするか尋ねる） */
   async function loadFile(file, handle) {
+    leavePlaylist();
     try {
       const text = Text.decodeFile(await file.arrayBuffer());
       const name = baseName(file.name) || '無題';
@@ -482,6 +490,12 @@
           open.className = 'song-open';
           open.textContent = song.name;
           open.addEventListener('click', () => finish({ open: song.id }));
+          const pl = document.createElement('button');
+          pl.type = 'button';
+          pl.className = 'song-tool';
+          pl.textContent = '＋';
+          pl.title = 'プレイリストに追加';
+          pl.addEventListener('click', () => finish({ addTo: song.id }));
           const ren = document.createElement('button');
           ren.type = 'button';
           ren.className = 'song-tool';
@@ -493,7 +507,7 @@
           del.className = 'song-tool danger';
           del.textContent = '削除';
           del.addEventListener('click', () => finish({ remove: song.id }));
-          li.append(open, ren, del);
+          li.append(open, pl, ren, del);
           ul.appendChild(li);
         }
       };
@@ -510,7 +524,11 @@
     songListRefresh = null;
     if (!action) { editor.focusEditor(); return; }
     if (action.open) {
+      leavePlaylist();
       openSong(action.open);
+    } else if (action.addTo) {
+      await addSongToPlaylist(action.addTo);
+      return openSongList();
     } else if (action.create) {
       await newDocument();
       return;
@@ -529,7 +547,8 @@
     } else if (action.remove) {
       const song = library.get(action.remove);
       if (song && await UI.confirm('曲を削除', `「${song.name}」を削除しますか？\n（同期している他の端末からも消えます）`)) {
-        library.remove(song.id);
+        library.remove(song.id);   // プレイリストからも外れる
+        if (playing) updatePlayBar();
         if (song.id === currentId) {
           currentId = '';
           const next = library.list()[0];
@@ -583,6 +602,7 @@
   });
 
   async function importEntries(entries, playlists) {
+    leavePlaylist();
     saveDraft();
     const dup = entries.filter((e) => library.findByName(e.name));
     let how = 'add';
@@ -616,9 +636,11 @@
         firstId = firstId || s.id;
       }
     }
-    if (playlists) {
-      library.playlists = playlists;
-      library.save();
+    // アプリ版のプレイリスト（曲名の並び）を入れる。同じ名前のプレイリストは曲順を置き換える
+    let playlistCount = 0;
+    if (playlists && playlists.length) {
+      library.importPlaylists(playlists);
+      playlistCount = playlists.length;
     }
     // 初めに自動でできた空の「無題」は、取り込んだら消す
     const blank = currentSong();
@@ -631,8 +653,361 @@
       openSong(firstId);
     }
     if (cloud) cloud.schedule();
-    await UI.message('取り込み', `${added} 曲を加え、${replaced} 曲を置き換えました。\n曲名をタップすると曲の一覧が開きます。`);
+    await UI.message('取り込み', `${added} 曲を加え、${replaced} 曲を置き換えました。` +
+      (playlistCount ? `\nプレイリスト ${playlistCount} 件も取り込みました（「♫ プレイリスト」で開けます）。` : '') +
+      '\n曲名をタップすると曲の一覧が開きます。');
     editor.focusEditor();
+  }
+
+  // ---- プレイリスト（iPad のアプリ版と同じ。演奏する順に曲を並べ、閲覧で 1 曲ずつ表示する） ----
+
+  const playBar = document.getElementById('playBar');
+
+  function scheduleSync() {
+    if (cloud) cloud.schedule();
+  }
+
+  function makeButton(cls, text, title, onClick, disabled) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.textContent = text;
+    if (title) b.title = title;
+    if (disabled) b.disabled = true;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  /** 表示中の「曲名（2/10）」 */
+  function playTitle() {
+    const p = playing && library.getPlaylist(playing.id);
+    if (!p || !p.songs.length) return songName();
+    return `${library.entryName(p.songs[playing.index])}（${playing.index + 1}/${p.songs.length}）`;
+  }
+
+  function updatePlayBar() {
+    playBar.hidden = !playing;
+    if (!playing) return;
+    const p = library.getPlaylist(playing.id);
+    if (!p || !p.songs.length) { stopPlaylist(false); return; }
+    if (playing.index >= p.songs.length) playing.index = p.songs.length - 1;
+    const missing = !library.resolve(p.songs[playing.index]);
+    playBar.querySelector('.play-list').textContent = p.name;
+    playBar.querySelector('.play-title').textContent = playTitle() + (missing ? '　見つかりません' : '');
+    playBar.querySelector('[data-play="prev"]').disabled = playing.index === 0;
+    playBar.querySelector('[data-play="next"]').disabled = playing.index + 1 >= p.songs.length;
+    updateCaption();
+  }
+
+  /** プレイリストの index 曲目から、閲覧モードで表示する */
+  function startPlaylist(id, index) {
+    const p = library.getPlaylist(id);
+    if (!p || !p.songs.length) return;
+    if (!playing) playing = { prevMode: editor.mode };
+    playing.id = id;
+    if (editor.mode !== 'view') {
+      editor.mode = 'view';
+      updateSplitBar();
+      updateToolbar();
+    }
+    showPlayIndex(index);
+    editor.focusEditor();
+  }
+
+  function showPlayIndex(i) {
+    const p = library.getPlaylist(playing.id);
+    if (!p) return;
+    i = Math.max(0, Math.min(p.songs.length - 1, i));
+    playing.index = i;
+    const s = library.resolve(p.songs[i]);
+    if (s) {
+      if (s.id !== currentId) openSong(s.id);
+    } else {
+      // 曲の一覧に無い曲（削除された・取り込んでいない）は空の譜面を出す（左右のスワイプで前後の曲へ移れる）
+      saveDraft();
+      currentId = '';
+      editor.setSheetText('');
+      editor.setModified(false);
+    }
+    updatePlayBar();
+    updateStatus();
+  }
+
+  /** 前後の曲へ（d = -1 / +1） */
+  function playStep(d) {
+    if (!playing) return;
+    const p = library.getPlaylist(playing.id);
+    if (!p) return;
+    const n = playing.index + d;
+    if (n < 0 || n >= p.songs.length) return;
+    showPlayIndex(n);
+  }
+
+  /** プレイリストの表示を終える。toList ならそのプレイリストの曲順に戻る */
+  function stopPlaylist(toList) {
+    if (!playing) return;
+    const { id, prevMode } = playing;
+    playing = null;
+    playBar.hidden = true;
+    if (editor.mode !== prevMode) {
+      editor.mode = prevMode;
+      updateSplitBar();
+      updateToolbar();
+    }
+    // 見つからない曲を表示していたときは、前に開いていた曲に戻る
+    if (!currentSong()) {
+      const s = library.get(library.currentId) || library.list()[0];
+      if (s) openSong(s.id); else newSong('無題');
+    }
+    updateCaption();
+    updateStatus();
+    if (toList && library.getPlaylist(id)) openPlaylist(id);
+    else editor.focusEditor();
+  }
+
+  /** 別の曲を開くときなど、プレイリストの表示をやめる（曲順には戻らない） */
+  function leavePlaylist() {
+    if (playing) stopPlaylist(false);
+  }
+
+  playBar.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.play === 'prev') playStep(-1);
+    else if (b.dataset.play === 'next') playStep(1);
+    else if (b.dataset.play === 'exit') stopPlaylist(true);
+  });
+  // 帯のボタンを押しても、エディタの入力欄からフォーカスを外さない
+  playBar.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) e.preventDefault();
+  });
+
+  // 閲覧中の左右のスワイプで前後の曲へ。1 曲目で左から右へスワイプするとプレイリストの曲順に戻る（アプリ版と同じ）
+  (() => {
+    const host = document.getElementById('editorHost');
+    let sx = 0, sy = 0, single = false;
+    host.addEventListener('touchstart', (e) => {
+      single = e.touches.length === 1;
+      if (single) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }
+    }, { passive: true });
+    host.addEventListener('touchend', (e) => {
+      if (!single || !playing || editor.mode !== 'view' || UI.isMenuOpen()) return;
+      single = false;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - sx, dy = t.clientY - sy;
+      if (Math.abs(dx) <= 100 || Math.abs(dx) <= Math.abs(dy) * 2) return;
+      if (dx < 0) playStep(1);
+      else if (playing.index > 0) playStep(-1);
+      else stopPlaylist(true);
+    }, { passive: true });
+  })();
+
+  /** プレイリストの一覧 */
+  async function openPlaylists() {
+    saveDraft();
+    const action = await UI.custom('プレイリスト', (body, buttons, finish) => {
+      const list = library.playlistList();
+      if (!list.length) {
+        body.innerHTML = '<p class="dlg-message">プレイリストがありません。「新しいプレイリスト」で作り、演奏する順に曲を並べます。</p>';
+      } else {
+        const ul = document.createElement('ul');
+        ul.className = 'song-list';
+        list.forEach((p, k) => {
+          const li = document.createElement('li');
+          li.className = 'song' + (playing && playing.id === p.id ? ' current' : '');
+          const open = makeButton('song-open', p.name, '', () => finish({ open: p.id }));
+          const count = document.createElement('span');
+          count.className = 'song-sub';
+          count.textContent = `${p.songs.length} 曲`;
+          open.appendChild(count);
+          li.append(open,
+            makeButton('song-tool', '▲', '上へ', () => finish({ move: p.id, d: -1 }), k === 0),
+            makeButton('song-tool', '▼', '下へ', () => finish({ move: p.id, d: 1 }), k === list.length - 1),
+            makeButton('song-tool', '名前', '名前を変える', () => finish({ rename: p.id })),
+            makeButton('song-tool danger', '削除', '', () => finish({ remove: p.id })));
+          ul.appendChild(li);
+        });
+        body.appendChild(ul);
+      }
+      UI.addButton(buttons, '閉じる', false, () => finish(null));
+      UI.addButton(buttons, '新しいプレイリスト', true, () => finish({ create: true }));
+    }, null, true);
+    if (!action) { editor.focusEditor(); return; }
+    if (action.open) return openPlaylist(action.open);
+    if (action.create) {
+      const name = await UI.prompt('新しいプレイリスト', '名前（例: 10月のライブ）', '');
+      if (name === null) return openPlaylists();
+      const p = library.createPlaylist(name);
+      scheduleSync();
+      return openPlaylist(p.id);
+    }
+    if (action.move) {
+      library.movePlaylist(action.move, action.d);
+      scheduleSync();
+    } else if (action.rename) {
+      const p = library.getPlaylist(action.rename);
+      const name = p && await UI.prompt('名前を変える', 'プレイリストの名前', p.name);
+      if (name && name.trim()) {
+        library.updatePlaylist(p.id, (q) => { q.name = name.trim(); });
+        scheduleSync();
+        if (playing) updatePlayBar();
+      }
+    } else if (action.remove) {
+      const p = library.getPlaylist(action.remove);
+      if (p && await UI.confirm('プレイリストを削除', `「${p.name}」を削除しますか？\n（曲そのものは消えません）`)) {
+        if (playing && playing.id === p.id) stopPlaylist(false);
+        library.deletePlaylist(p.id);
+        scheduleSync();
+      }
+    }
+    return openPlaylists();
+  }
+
+  /** プレイリストの曲順（曲をタップするとそこから表示、▲▼で並べ替え、「外す」でプレイリストから外す） */
+  async function openPlaylist(id) {
+    const p = library.getPlaylist(id);
+    if (!p) return openPlaylists();
+    saveDraft();
+    const action = await UI.custom(p.name, (body, buttons, finish) => {
+      if (p.songs.length) {
+        body.appendChild(makeButton('pl-play', '▶ 最初から表示', '', () => finish({ play: 0 })));
+        const ul = document.createElement('ul');
+        ul.className = 'song-list';
+        p.songs.forEach((entry, i) => {
+          const li = document.createElement('li');
+          li.className = 'song' + (playing && playing.id === id && playing.index === i ? ' current' : '');
+          const num = document.createElement('span');
+          num.className = 'song-num';
+          num.textContent = String(i + 1);
+          const open = makeButton('song-open', library.entryName(entry), '', () => finish({ play: i }));
+          if (!library.resolve(entry)) {
+            const miss = document.createElement('span');
+            miss.className = 'song-missing';
+            miss.textContent = '見つかりません';
+            open.appendChild(miss);
+          }
+          li.append(num, open,
+            makeButton('song-tool', '▲', '前へ', () => finish({ move: i, d: -1 }), i === 0),
+            makeButton('song-tool', '▼', '後ろへ', () => finish({ move: i, d: 1 }), i === p.songs.length - 1),
+            makeButton('song-tool danger', '外す', 'プレイリストから外す（曲そのものは消えません）', () => finish({ drop: i })));
+          ul.appendChild(li);
+        });
+        body.appendChild(ul);
+      } else {
+        body.innerHTML = '<p class="dlg-message">曲がありません。「曲を追加」で、演奏する順に曲を選びます。</p>';
+      }
+      const back = UI.addButton(buttons, '‹ プレイリスト', false, () => finish({ back: true }));
+      back.classList.add('left');
+      UI.addButton(buttons, '閉じる', false, () => finish(null));
+      UI.addButton(buttons, '曲を追加', true, () => finish({ add: true }));
+    }, null, true);
+    if (!action) { editor.focusEditor(); return; }
+    if (action.back) return openPlaylists();
+    if (action.play !== undefined) { startPlaylist(id, action.play); return; }
+    if (action.move !== undefined) {
+      library.updatePlaylist(id, (q) => {
+        const i = action.move, j = i + action.d;
+        if (j < 0 || j >= q.songs.length) return;
+        [q.songs[i], q.songs[j]] = [q.songs[j], q.songs[i]];
+      });
+      scheduleSync();
+    } else if (action.drop !== undefined) {
+      library.updatePlaylist(id, (q) => { q.songs.splice(action.drop, 1); });
+      scheduleSync();
+    } else if (action.add) {
+      const ids = await pickSongs();
+      if (ids && ids.length) {
+        library.updatePlaylist(id, (q) => { q.songs = q.songs.concat(ids); });
+        scheduleSync();
+      }
+    }
+    if (playing && playing.id === id) updatePlayBar();
+    return openPlaylist(id);
+  }
+
+  /** プレイリストに足す曲を選ぶ。選んだ順に番号が付き、その順の曲の id を返す（キャンセルは null） */
+  function pickSongs() {
+    const picked = [];
+    return UI.custom('曲を追加', (body, buttons, finish) => {
+      body.innerHTML = '<input type="search" class="song-search" placeholder="曲名で探す" autocomplete="off">' +
+        '<p class="song-count">選んだ順にプレイリストの最後へ足します。あとで並べ替えもできます。</p>' +
+        '<ul class="song-list pick-list"></ul>';
+      const search = body.querySelector('.song-search');
+      const ul = body.querySelector('.song-list');
+      let addBtn = null;
+      const render = () => {
+        const q = search.value.trim().normalize('NFC').toLowerCase();
+        const all = library.list();
+        const songs = q ? all.filter((x) => x.name.normalize('NFC').toLowerCase().includes(q)) : all;
+        ul.textContent = '';
+        for (const song of songs) {
+          const li = document.createElement('li');
+          const k = picked.indexOf(song.id);
+          li.className = 'song' + (k >= 0 ? ' picked' : '');
+          const b = makeButton('song-open', song.name, '', () => {
+            const at = picked.indexOf(song.id);
+            if (at >= 0) picked.splice(at, 1); else picked.push(song.id);
+            render();
+          });
+          const badge = document.createElement('span');
+          badge.className = 'pick-num';
+          badge.textContent = k >= 0 ? String(k + 1) : '';
+          b.appendChild(badge);
+          li.appendChild(b);
+          ul.appendChild(li);
+        }
+        if (addBtn) {
+          addBtn.textContent = picked.length ? `追加（${picked.length}）` : '追加';
+          addBtn.disabled = !picked.length;
+        }
+      };
+      UI.addButton(buttons, 'キャンセル', false, () => finish(null));
+      addBtn = UI.addButton(buttons, '追加', true, () => finish(picked.slice()));
+      search.addEventListener('input', render);
+      render();
+    }, null, true);
+  }
+
+  /** 曲の一覧の「＋」：曲をプレイリストの最後に足す */
+  async function addSongToPlaylist(songId) {
+    const song = library.get(songId);
+    if (!song) return;
+    const r = await UI.custom('プレイリストに追加', (body, buttons, finish) => {
+      const msg = document.createElement('p');
+      msg.className = 'dlg-message';
+      msg.textContent = `「${song.name}」を、どのプレイリストの最後に足しますか？`;
+      body.appendChild(msg);
+      const list = library.playlistList();
+      if (list.length) {
+        const ul = document.createElement('ul');
+        ul.className = 'song-list';
+        for (const p of list) {
+          const li = document.createElement('li');
+          li.className = 'song';
+          const b = makeButton('song-open', p.name, '', () => finish({ to: p.id }));
+          const count = document.createElement('span');
+          count.className = 'song-sub';
+          count.textContent = `${p.songs.length} 曲`;
+          b.appendChild(count);
+          li.appendChild(b);
+          ul.appendChild(li);
+        }
+        body.appendChild(ul);
+      }
+      UI.addButton(buttons, 'キャンセル', false, () => finish(null));
+      UI.addButton(buttons, '新しいプレイリストを作って追加', !list.length, () => finish({ create: true }));
+    }, null);
+    if (!r) return;
+    let id = r.to;
+    if (r.create) {
+      const name = await UI.prompt('新しいプレイリスト', '名前（例: 10月のライブ）', '');
+      if (name === null) return;
+      id = library.createPlaylist(name).id;
+    }
+    library.updatePlaylist(id, (q) => { q.songs.push(songId); });
+    scheduleSync();
+    if (playing && playing.id === id) updatePlayBar();
+    statusEl.textContent = `「${song.name}」を「${library.getPlaylist(id).name}」に追加しました`;
   }
 
   // ---- 編集 ----
@@ -787,7 +1162,7 @@
       '<p>コード行に、打った文字（サビ、×2、rit. など）をそのまま置きます。空白で次の位置へ進みます。</p>' +
       '<h3>ショートカット</h3>' +
       t([
-        ['Alt+L / Alt+N', '曲の一覧 / 新しい曲'],
+        ['Alt+L / Alt+P / Alt+N', '曲の一覧 / プレイリスト / 新しい曲'],
         [CTRL + 'O / ' + CTRL + 'S', 'ファイルを開く / ファイルに上書き保存（' + CTRL + 'Shift+S で名前を付けて保存）'],
         [CTRL + 'B', '歌詞の太字（カーソルの行をまるごと切り替え）'],
         [CTRL + 'I', 'PDF のコード譜を読み込む'],
@@ -800,6 +1175,11 @@
       '<h3>曲の一覧（「☰ 曲の一覧」・右上の曲名）</h3>' +
       '<p>曲はすべてブラウザの中に自動で保存されます（保存の操作は要りません）。一覧から曲を開く・新しい曲を作る・名前を変える・削除するができます。' +
       'コードの点滅・色と歌詞の太字も曲と一緒に保存されます（.lct には入らないので、Windows 版やファイルに保存したときには付きません）。</p>' +
+      '<h3>プレイリスト（「♫ プレイリスト」・Alt+P）</h3>' +
+      '<p>演奏する順に曲を並べておき、閲覧で 1 曲ずつ表示します（iPad のアプリ版と同じ）。' +
+      '「新しいプレイリスト」で作り、「曲を追加」で曲を選んだ順に足します（曲の一覧の「＋」でも足せます）。▲▼で並べ替え、「外す」でプレイリストから外します（曲そのものは消えません）。' +
+      '「▶ 最初から表示」か曲をタップすると、上の帯に「曲名（2/10）」が出て、◀▶・左右のスワイプ・←→ キーで前後の曲に移れます。' +
+      '「‹ 曲順」（1 曲目で左から右へスワイプ・Esc）で曲順に戻ります。プレイリストも他の端末と同期します。</p>' +
       '<h3>iPad のアプリ版からの引っ越し</h3>' +
       '<p>アプリ版の「…」→「Web 版へ書き出す」で、全曲（点滅・色・太字も）が「ファイル」の「この iPad 内 › LyricCode › Web版へ」に書き出されます。' +
       'ここで「曲の一覧」→「取り込む...」を押してそのファイル（LyricCode 全曲.json）を選ぶと、全曲が曲の一覧に入ります。' +
@@ -826,6 +1206,7 @@
   const commands = {
     new: newDocument,
     songs: openSongList,
+    playlists: openPlaylists,
     open: openFile,
     save: () => save(false),
     saveAs: () => save(true),
@@ -854,6 +1235,7 @@
   const MENUS = {
     file: () => [
       { label: '曲の一覧...', shortcut: 'Alt+L', cmd: 'songs' },
+      { label: 'プレイリスト...', shortcut: 'Alt+P', cmd: 'playlists' },
       { label: '新しい曲...', shortcut: 'Alt+N', cmd: 'new' },
       '-',
       { label: 'ファイルを開く...', shortcut: CTRL + 'O', cmd: 'open' },
@@ -921,6 +1303,16 @@
     if (e.isComposing || e.keyCode === 229) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    // プレイリストの閲覧中：←→ で前後の曲、Esc で曲順に戻る
+    if (playing && editor.mode === 'view' && !ctrl && !e.altKey && !e.shiftKey) {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === 'Escape') stopPlaylist(true);
+        else playStep(e.key === 'ArrowLeft' ? -1 : 1);
+        return;
+      }
+    }
     let cmd = null;
     if (ctrl && !e.altKey) {
       if (k === 'o' && !e.shiftKey) cmd = 'open';
@@ -941,6 +1333,7 @@
       if (m) { setMode(MODE_KEYS[Number(m[1]) - 1]); e.preventDefault(); return; }
       if (e.code === 'KeyN') cmd = 'new';
       else if (e.code === 'KeyL') cmd = 'songs';
+      else if (e.code === 'KeyP') cmd = 'playlists';
     } else if (e.key === 'F1') {
       cmd = 'help';
     }

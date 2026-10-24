@@ -1,15 +1,19 @@
-/* 曲の一覧（ブラウザの中に全曲を持つ）。iPad のアプリ版の「曲」のライブラリに相当する。
+/* 曲の一覧とプレイリスト（ブラウザの中に全曲を持つ）。iPad のアプリ版の「曲」「プレイリスト」に相当する。
 
    1 曲 = { id, name, text, style, updatedAt }
      text  … .lct の形式（Windows 版と同じ）
      style … .lct に書かない飾り（点滅・コードの色・歌詞の太字。Sheet.getStyle の形）
-   消した曲は { id, deleted: true, updatedAt } を残す（他の端末に「消した」ことを伝えるため）。
+   1 プレイリスト = { id, name, songs, pos, updatedAt }
+     songs … 演奏順の曲（曲の id。同じ曲を何度入れてもよい）。曲の一覧に無い曲は 'name:曲名' で持つ
+     pos   … プレイリストの一覧での並び順
+   消した曲・プレイリストは { id, deleted: true, updatedAt } を残す（他の端末に「消した」ことを伝えるため）。
 
-   他の端末との同期では、曲ごとに updatedAt の新しい方を残す（mergeFrom）。 */
+   他の端末との同期では、曲・プレイリストごとに updatedAt の新しい方を残す（mergeFrom）。 */
 (function (LC) {
   'use strict';
 
   const KEY = 'lyriccode.library';
+  const NAME_PREFIX = 'name:';
 
   function now() {
     return new Date().toISOString();
@@ -22,7 +26,7 @@
   class Library {
     constructor() {
       this.songs = [];      // 消した曲の印も含む
-      this.playlists = [];  // アプリ版から取り込んだプレイリスト（{ name, songs: [曲名] }。今は保存だけ）
+      this.playlists = [];  // 消したプレイリストの印も含む
       this.currentId = '';
       this.load();
     }
@@ -36,6 +40,12 @@
           this.currentId = d.currentId || '';
         }
       } catch (e) { /* 読めなければ空から始める */ }
+      // 前の版（v3～v5）は、アプリ版から取り込んだプレイリストを { name, songs: [曲名] } のまま持っていた
+      if (this.playlists.some((p) => p && !p.id)) {
+        this.playlists = this.fromNamed(this.playlists.filter((p) => p && !p.id))
+          .concat(this.playlists.filter((p) => p && p.id));
+        this.save();
+      }
     }
 
     save() {
@@ -100,21 +110,121 @@
       return this.update(id, { name: this.uniqueName(name, id) });
     }
 
+    /** 曲を消す（プレイリストからも外す） */
     remove(id) {
       const i = this.songs.findIndex((s) => s.id === id);
       if (i < 0) return;
       this.songs[i] = { id, deleted: true, updatedAt: now() };
+      for (const p of this.playlistList()) {
+        if (p.songs.includes(id)) this.updatePlaylist(p.id, (q) => { q.songs = q.songs.filter((x) => x !== id); });
+      }
+      this.save();
+    }
+
+    // ---- プレイリスト ----
+
+    /** 消していないプレイリストを、並び順に */
+    playlistList() {
+      return this.playlists.filter((p) => !p.deleted).sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
+    }
+
+    getPlaylist(id) {
+      return this.playlists.find((p) => p.id === id && !p.deleted) || null;
+    }
+
+    findPlaylistByName(name) {
+      const n = name.normalize('NFC');
+      return this.playlistList().find((p) => p.name.normalize('NFC') === n) || null;
+    }
+
+    createPlaylist(name, songs) {
+      const list = this.playlistList();
+      const pos = list.length ? Math.max(...list.map((p) => p.pos ?? 0)) + 1 : 0;
+      const p = { id: newId(), name: (name || '').trim() || '新しいプレイリスト', songs: songs || [], pos, updatedAt: now() };
+      this.playlists.push(p);
+      this.save();
+      return p;
+    }
+
+    /** change(プレイリスト) で書き換える */
+    updatePlaylist(id, change) {
+      const p = this.getPlaylist(id);
+      if (!p) return null;
+      const before = JSON.stringify(p);
+      change(p);
+      if (JSON.stringify(p) !== before) {
+        p.updatedAt = now();
+        this.save();
+      }
+      return p;
+    }
+
+    deletePlaylist(id) {
+      const i = this.playlists.findIndex((p) => p.id === id);
+      if (i < 0) return;
+      this.playlists[i] = { id, deleted: true, updatedAt: now() };
+      this.save();
+    }
+
+    /** プレイリストの一覧で、上下（delta = -1 / +1）に動かす */
+    movePlaylist(id, delta) {
+      const list = this.playlistList();
+      const i = list.findIndex((p) => p.id === id);
+      const j = i + delta;
+      if (i < 0 || j < 0 || j >= list.length) return;
+      [list[i], list[j]] = [list[j], list[i]];
+      // 並び順を振り直す（変わったものだけ更新日時が変わる）
+      list.forEach((p, k) => this.updatePlaylist(p.id, (q) => { q.pos = k; }));
+    }
+
+    /** プレイリストの 1 曲分（曲の id か 'name:曲名'）を曲にする。曲の一覧に無ければ null */
+    resolve(entry) {
+      if (typeof entry !== 'string') return null;
+      if (entry.startsWith(NAME_PREFIX)) return this.findByName(entry.slice(NAME_PREFIX.length));
+      return this.get(entry);
+    }
+
+    /** プレイリストの 1 曲分の名前（見つからない曲も名前を出す） */
+    entryName(entry) {
+      const s = this.resolve(entry);
+      if (s) return s.name;
+      if (typeof entry === 'string' && entry.startsWith(NAME_PREFIX)) return entry.slice(NAME_PREFIX.length);
+      return '（削除された曲）';
+    }
+
+    /** 曲名で並べたプレイリスト（アプリ版の書き出し・前の版の形）を、この形に直す */
+    fromNamed(named) {
+      let pos = this.playlistList().reduce((m, p) => Math.max(m, (p.pos ?? 0) + 1), 0);
+      return named.filter((p) => p && Array.isArray(p.songs)).map((p) => ({
+        id: newId(),
+        name: String(p.name || '新しいプレイリスト').normalize('NFC'),
+        songs: p.songs.map((n) => {
+          const s = this.findByName(String(n).normalize('NFC'));
+          return s ? s.id : NAME_PREFIX + String(n).normalize('NFC');
+        }),
+        pos: pos++,
+        updatedAt: now(),
+      }));
+    }
+
+    /** アプリ版から取り込んだプレイリストを入れる（同じ名前のものは曲順を置き換える） */
+    importPlaylists(named) {
+      for (const p of this.fromNamed(named)) {
+        const same = this.findPlaylistByName(p.name);
+        if (same) this.updatePlaylist(same.id, (q) => { q.songs = p.songs; });
+        else this.playlists.push(p);
+      }
       this.save();
     }
 
     /** 同期で送る内容（並びを決めておき、端末どうしで同じ内容なら同じ文字列になるようにする） */
     snapshot() {
-      const songs = [...this.songs].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-      return { songs, playlists: this.playlists };
+      const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      return { songs: [...this.songs].sort(byId), playlists: [...this.playlists].sort(byId) };
     }
 
     /**
-     * 他の端末の内容を合わせる（曲ごとに新しい方を残す）。
+     * 他の端末の内容を合わせる（曲・プレイリストごとに新しい方を残す）。
      * 戻り値はこの端末で中身が変わった曲の id（今開いている曲を読み直すため）
      */
     mergeFrom(remote) {
@@ -131,10 +241,28 @@
           changed.push(r.id);
         }
       }
-      if (Array.isArray(remote.playlists) && remote.playlists.length && !this.playlists.length) {
-        this.playlists = remote.playlists;
+      let playlistsChanged = false;
+      if (Array.isArray(remote.playlists)) {
+        // 前の版の端末が送ってきた名前だけのプレイリストは、この端末に 1 つも無いときだけ受け取る
+        const legacy = remote.playlists.filter((p) => p && !p.id);
+        if (legacy.length && !this.playlistList().length) {
+          this.playlists.push(...this.fromNamed(legacy));
+          playlistsChanged = true;
+        }
+        for (const r of remote.playlists) {
+          if (!r || !r.id) continue;
+          const i = this.playlists.findIndex((p) => p.id === r.id);
+          if (i < 0) {
+            this.playlists.push(r);
+            playlistsChanged = true;
+          } else if ((r.updatedAt || '') > (this.playlists[i].updatedAt || '')) {
+            this.playlists[i] = r;
+            playlistsChanged = true;
+          }
+        }
       }
-      if (changed.length) this.save();
+      if (changed.length || playlistsChanged) this.save();
+      this.playlistsChanged = playlistsChanged;
       return changed;
     }
   }

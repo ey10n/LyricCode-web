@@ -30,6 +30,7 @@
 
   <div class="toolbar" role="toolbar" aria-label="ツールバー">
     <button type="button" data-cmd="songs" class="songs-btn" title="曲の一覧 (Alt+L)">☰ 曲の一覧</button>
+    <button type="button" data-cmd="playlists" class="songs-btn" title="プレイリスト (Alt+P)">♫ プレイリスト</button>
     <div class="group" role="group" aria-label="モード">
       <button type="button" class="mode" data-mode="lyric" title="歌詞編集 (Alt+1)">歌詞</button>
       <button type="button" class="mode" data-mode="chord" title="コード編集 (Alt+2)">コード</button>
@@ -51,6 +52,15 @@
       <button type="button" data-cmd="redo" title="やり直し">↷</button>
       <button type="button" data-cmd="paste" title="歌詞を貼り付け">貼り付け</button>
     </div>
+  </div>
+
+  <!-- プレイリストの表示中だけ出す帯（iPad のアプリ版の細いタイトルに相当） -->
+  <div id="playBar" class="play-bar" hidden>
+    <button type="button" data-play="exit" title="プレイリストの曲順に戻る (Esc)">‹ 曲順</button>
+    <span class="play-list"></span>
+    <button type="button" data-play="prev" title="前の曲 (←)">◀</button>
+    <span class="play-title"></span>
+    <button type="button" data-play="next" title="次の曲 (→)">▶</button>
   </div>
 
   <main id="editorHost" class="editor-host"></main>
