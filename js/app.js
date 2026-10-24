@@ -6,7 +6,7 @@
   const { Editor, Text, UI, PdfImport, Sheet, Cloud } = LC;
 
   /** 画面に出す版の番号。公開し直すときは sw.js の CACHE と同じ番号に上げる */
-  const APP_VERSION = 'v1';
+  const APP_VERSION = 'v2';
 
   const MODE_NAMES = { lyric: '歌詞編集', chord: 'コード編集', both: '歌詞＋コード編集', view: '閲覧' };
   const MODE_KEYS = ['lyric', 'chord', 'both', 'view'];
@@ -393,13 +393,59 @@
 
   // ---- 編集 ----
 
+  // 貼り付けた文字がコード譜か（LyricCode の保存形式、またはコードだけの行とその下の歌詞の行がある）。
+  // iPad のアプリ版などで「全体をテキストとしてコピー」したものを、コードの位置ごと取り込むため
+  function looksLikeChordSheet(text) {
+    const lines = Sheet.splitLines(text || '');
+    if (lines.length > 0 && lines[0].startsWith('#LyricCode')) return true;
+    for (let i = 0; i + 1 < lines.length; i++) {
+      if (LC.Chord.isChordLine(lines[i]) && lines[i + 1].trim() !== '' && !LC.Chord.isChordLine(lines[i + 1])) return true;
+    }
+    return false;
+  }
+
+  async function handlePaste(text) {
+    if (!text) return;
+    if ((editor.mode === 'lyric' || editor.mode === 'both' || editor.mode === 'chord') && looksLikeChordSheet(text)) {
+      let load = isEmptyDoc();
+      if (!load) {
+        const r = await UI.choose('コード譜の貼り付け', '貼り付ける文字はコード譜のようです。どのように貼り付けますか？', [
+          { key: 'cancel', label: 'キャンセル' },
+          { key: 'lyric', label: '歌詞として挿入' },
+          { key: 'sheet', label: 'コード譜として読み込む（今の内容と置き換え）', primary: true }]);
+        if (r === 'cancel') { editor.focusEditor(); return; }
+        load = r === 'sheet';
+        if (load && editor.modified && !(await confirmSave())) { editor.focusEditor(); return; }
+      }
+      if (load) {
+        editor.setSheetText(text);
+        fileName = '';
+        fileHandle = null;
+        suggestName = '';
+        editor.setModified(true);
+        updateCaption();
+        saveDraft();
+        statusEl.textContent = 'コード譜を読み込みました';
+        editor.focusEditor();
+        return;
+      }
+    }
+    editor.pasteText(text);
+    editor.focusEditor();
+  }
+
+  editor.onPaste = handlePaste;
+
   async function paste() {
+    let text;
     try {
-      editor.pasteText(await navigator.clipboard.readText());
+      text = await navigator.clipboard.readText();
     } catch (e) {
       await UI.message('貼り付け', 'クリップボードを読めませんでした。\n' + CTRL + 'V で貼り付けてください。');
+      editor.focusEditor();
+      return;
     }
-    editor.focusEditor();
+    await handlePaste(text);
   }
 
   async function copyAll() {
@@ -487,6 +533,10 @@
       '<h3>ファイル</h3>' +
       '<p>保存形式（.lct）は Windows 版の LyricCode と同じです。Safari など、ファイルを直接上書きできないブラウザでは、保存するとダウンロードになります。' +
       '書きかけの内容はブラウザに自動で保存され、次に開いたときに続きから書けます。</p>' +
+      '<h3>iPad のアプリ版・他のアプリからの取り込み</h3>' +
+      '<p>アプリ版の「編集」→「全体をテキストとしてコピー」でコピーし、ここで「貼り付け」（' + CTRL + 'V）を押すと、' +
+      'コードの位置を保ったままコード譜として読み込みます。コード行に日本語（自由文字）がある場合は、' +
+      'アプリ版で .lct を「ファイル」アプリに保存し、「ファイル」→「開く」で読み込むと確実です。</p>' +
       '<h3>他の端末との同期（右上の ☁）</h3>' +
       '<p>GitHub の非公開の Gist を使って、作業中のコード譜を端末どうしで同期します。PC で途中まで書いて、iPad で続きを書けます。' +
       '「gist」の権限だけの GitHub のトークンを、同期したい端末ごとに一度登録してください（Lyricker と同じトークンで構いません）。' +

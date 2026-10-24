@@ -116,7 +116,7 @@
       this.menuLine = 0; this.menuCol = 0;
       this.focused = false; this.composing = false; this.cancelComposition = false;
       this.suppressScrollHover = false;
-      this.onChange = null; this.onStatus = null;
+      this.onChange = null; this.onStatus = null; this.onPaste = null;
 
       this.updateMetrics();
       this.attachEvents();
@@ -590,7 +590,9 @@
       for (const el of [this.ta, this.ck, sc]) {
         el.addEventListener('paste', (e) => {
           e.preventDefault();
-          this.pasteText(e.clipboardData ? e.clipboardData.getData('text/plain') : '');
+          const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+          // 貼り付けた文字がコード譜なら、アプリ側でコード譜として読み込めるようにする
+          if (this.onPaste) this.onPaste(text); else this.pasteText(text);
         });
       }
       this.host.addEventListener('focusin', () => {
