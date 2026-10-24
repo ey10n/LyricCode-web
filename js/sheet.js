@@ -112,18 +112,15 @@
   }
 
   // コード行の文字列を読む（空白で区切った語の先頭の桁がコードの位置）。
-  // 自由文字の日本語などは全角 2 桁として数える（テキストエディタで開いても位置がそろう）
+  // 桁は 1 文字 = 1 桁で数える（Windows 版・iPad のアプリ版と同じ .lct の数え方。
+  // 自由文字の日本語も 1 文字 = 1 桁。数え方を変えると他の版との間でコードの位置がずれる）
   function parseChordLine(s, line) {
     let col = 0, i = 0;
     while (i < s.length) {
       if (s[i] === ' ' || s[i] === '\t') { i++; col++; continue; }
       const start = col;
       let tok = '';
-      while (i < s.length && s[i] !== ' ' && s[i] !== '\t') {
-        tok += s[i];
-        col += Text.charCells(s.charCodeAt(i));
-        i++;
-      }
+      while (i < s.length && s[i] !== ' ' && s[i] !== '\t') { tok += s[i]; i++; col++; }
       line.appendChord(start, tok);
     }
     line.normalize();
@@ -136,7 +133,7 @@
       if (i > 0 && p < curLen + 1) p = curLen + 1;
       const name = Text.fixSurrogates(c.name);
       r += ' '.repeat(p - curLen) + name;
-      curLen = p + Text.allCells(name);
+      curLen = p + name.length;
     });
     return r;
   }
