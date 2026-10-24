@@ -3,10 +3,10 @@
 (function (LC) {
   'use strict';
 
-  const { Editor, Text, UI, PdfImport, Sheet, Cloud, Library } = LC;
+  const { Editor, Text, UI, PdfImport, Sheet, Cloud, Library, ChordPalette } = LC;
 
   /** 画面に出す版の番号。公開し直すときは sw.js の CACHE と同じ番号に上げる */
-  const APP_VERSION = 'v6';
+  const APP_VERSION = 'v7';
 
   const MODE_NAMES = { lyric: '歌詞編集', chord: 'コード編集', both: '歌詞＋コード編集', view: '閲覧' };
   const MODE_KEYS = ['lyric', 'chord', 'both', 'view'];
@@ -25,6 +25,16 @@
   const openInput = document.getElementById('openInput');
   const pdfInput = document.getElementById('pdfInput');
   const freeTextBtn = document.getElementById('freeTextBtn');
+  const toastEl = document.getElementById('toast');
+
+  // コードパレット（指で操作する端末では最初から使う。「表示」→「コードパレット」で切り替えられる）
+  const palette = new ChordPalette(editor, document.getElementById('chordPalette'), document.getElementById('rangeBar'), {
+    toast,
+    editChord: () => editChordFromPalette(),
+    changed: () => { updateToolbar(); saveSettings(); },
+  });
+  palette.enabled = matchMedia('(pointer: coarse)').matches;
+  let appearance = 'light';
 
   const library = new Library();
   const importInput = document.getElementById('importInput');
@@ -52,6 +62,7 @@
 
   function updateStatus() {
     statusEl.textContent = '【' + MODE_NAMES[editor.mode] + '】  ' + editor.statusText();
+    palette.refresh();
   }
 
   function updateToolbar() {
@@ -59,6 +70,39 @@
       b.setAttribute('aria-pressed', String(b.dataset.mode === editor.mode));
     });
     freeTextBtn.setAttribute('aria-pressed', String(editor.freeText));
+    document.querySelectorAll('.font-size').forEach((s) => { s.textContent = String(editor.fontSize); });
+    palette.refresh();
+  }
+
+  // 上に出るお知らせ（2.5 秒で消える。続けて出すときは前のものを置き換える）
+  let toastTimer = 0;
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.hidden = true; }, 2500);
+  }
+
+  // 画面の明るさ（ライト / ダーク。端末の設定には合わせない。iPad のアプリ版と同じく標準はライト）
+  function applyAppearance(v) {
+    appearance = v === 'dark' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = appearance;
+    editor.theme = appearance;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = appearance === 'dark' ? '#1C1C1E' : '#FFFFFF';
+    palette.refresh();
+  }
+
+  function setAppearance(v) {
+    applyAppearance(v);
+    saveSettings();
+  }
+
+  // コードパレットを使うときは、コード入力で画面のキーボードを出さない
+  function setPaletteEnabled(v) {
+    palette.enabled = !!v;
+    editor.chordKeyboard = !palette.enabled;
+    palette.refresh();
   }
 
   // ---- 作業内容の自動保存（ブラウザを閉じても続きから書ける） ----
@@ -84,21 +128,27 @@
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({
         // プレイリストの表示中は閲覧になっているので、その前のモードを覚える
         mode: playing ? playing.prevMode : editor.mode,
-        freeText: editor.freeText, fontSize: editor.fontSize, splitEnabled: editor.splitEnabled,
+        freeText: editor.freeText, fontPx: editor.fontSize, splitEnabled: editor.splitEnabled,
+        appearance, palette: palette.enabled, autoAdvance: editor.autoAdvance,
       }));
     } catch (e) { /* 無視 */ }
   }
 
   function restore() {
-    try {
-      const st = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null');
-      if (st) {
-        if (MODE_KEYS.includes(st.mode)) editor.mode = st.mode;
-        editor.freeText = !!st.freeText;
-        if (st.fontSize) editor.fontSize = st.fontSize;
-        if (st.splitEnabled === false) editor.splitEnabled = false;
-      }
-    } catch (e) { /* 無視 */ }
+    let st = null;
+    try { st = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null'); } catch (e) { /* 無視 */ }
+    if (st) {
+      if (MODE_KEYS.includes(st.mode)) editor.mode = st.mode;
+      editor.freeText = !!st.freeText;
+      // 文字の大きさは px（v6 まではポイントで fontSize に持っていた）
+      if (st.fontPx) editor.fontSize = st.fontPx;
+      else if (st.fontSize && st.fontSize !== 14) editor.fontSize = Math.round(st.fontSize * 4 / 3); // 14 は前の標準
+      if (st.splitEnabled === false) editor.splitEnabled = false;
+      if (typeof st.palette === 'boolean') palette.enabled = st.palette;
+      if (st.autoAdvance === false) editor.autoAdvance = false;
+    }
+    applyAppearance(st && st.appearance);
+    setPaletteEnabled(palette.enabled);
     // 前の版の書きかけの 1 曲を、曲の一覧の最初の曲にする
     if (!library.list().length) {
       let d = null;
@@ -131,6 +181,7 @@
     editor.setModified(false);
     updateCaption();
     updateStatus();
+    warnBroken(s);
   }
 
   function newSong(name, text, style) {
@@ -146,6 +197,18 @@
     if (cloud) cloud.schedule();
   };
   editor.onStatus = updateStatus;
+  editor.onRangeChange = () => palette.refresh();
+  editor.onZoom = () => { updateToolbar(); saveSettings(); };
+
+  // 取り込んだときに文字コードを読み取れなかった曲（「�」がある）を開いたら知らせる（曲ごとに 1 回）
+  const warnedBroken = new Set();
+  function warnBroken(s) {
+    if (!s || warnedBroken.has(s.id) || !s.text.includes('�')) return;
+    warnedBroken.add(s.id);
+    setTimeout(() => UI.message('読めなかった文字があります',
+      'この曲は取り込んだときに文字コードを読み取れなかったため、一部の文字が「�」になっています（元の文字には戻せません）。' +
+      '元のファイルから取り込み直してください。\n文字化け（縺ｯ繧九 など）なら「編集」→「文字化けを修復...」で直せることがあります。'), 0);
+  }
 
   // ---- 左右 2 列の閲覧の分割位置（曲ごとに覚える。iPad のアプリ版と同じ） ----
 
@@ -502,12 +565,14 @@
           ren.textContent = '名前';
           ren.title = '名前を変える';
           ren.addEventListener('click', () => finish({ rename: song.id }));
+          const dup = makeButton('song-tool', '複製', '「曲名 のコピー」を作る', () => finish({ duplicate: song.id }));
+          const send = makeButton('song-tool', '送る', 'ファイル（.lct）として送る・保存する', () => finish({ send: song.id }));
           const del = document.createElement('button');
           del.type = 'button';
           del.className = 'song-tool danger';
           del.textContent = '削除';
           del.addEventListener('click', () => finish({ remove: song.id }));
-          li.append(open, pl, ren, del);
+          li.append(open, pl, ren, dup, send, del);
           ul.appendChild(li);
         }
       };
@@ -544,9 +609,22 @@
         updateCaption();
       }
       return openSongList();
+    } else if (action.duplicate) {
+      // 点滅・色・太字は複製しない（iPad のアプリ版と同じ）
+      saveDraft();
+      const song = library.get(action.duplicate);
+      if (song) {
+        const s = library.add(song.name + ' のコピー', song.text, {});
+        if (cloud) cloud.schedule();
+        statusEl.textContent = `「${s.name}」を作りました`;
+      }
+      return openSongList();
+    } else if (action.send) {
+      await sendSong(action.send);
+      return openSongList();
     } else if (action.remove) {
       const song = library.get(action.remove);
-      if (song && await UI.confirm('曲を削除', `「${song.name}」を削除しますか？\n（同期している他の端末からも消えます）`)) {
+      if (song && await UI.confirm('曲を削除', `「${song.name}」を削除しますか？\nプレイリストからも外れます（同期している他の端末からも消えます）。`)) {
         library.remove(song.id);   // プレイリストからも外れる
         if (playing) updatePlayBar();
         if (song.id === currentId) {
@@ -559,6 +637,45 @@
       return openSongList();
     }
     editor.focusEditor();
+  }
+
+  /** 曲をファイル（.lct）として送る。共有できる端末（iPad など）は共有の画面（AirDrop など）、それ以外はダウンロード */
+  async function sendSong(id) {
+    saveDraft();
+    const song = library.get(id);
+    if (!song) return;
+    const name = song.name.replace(/[\\/:*?"<>|]/g, '_') + '.lct';
+    const file = new File([Text.encodeFile(song.text)], name, { type: 'text/plain' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: song.name });
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+      }
+    }
+    downloadBlob(file, name);
+  }
+
+  /** 全曲（点滅・色・太字・プレイリストも）を 1 つのファイルに書き出す（iPad のアプリ版の「Web 版へ書き出す」と同じ形） */
+  function exportAll() {
+    saveDraft();
+    const songs = library.list().map((s) => {
+      const x = { name: s.name, text: s.text };
+      const st = s.style || {};
+      x.blinking = st.blinking || [];
+      x.chordColors = st.chordColors || [];
+      x.boldLyrics = st.boldLyrics || [];
+      if (Number.isInteger(s.splitLine)) x.splitLine = s.splitLine;
+      return x;
+    });
+    const playlists = library.playlistList().map((p) => ({
+      name: p.name,
+      songs: p.songs.filter((e) => library.resolve(e)).map((e) => library.entryName(e)),
+    }));
+    const data = { format: BUNDLE_FORMAT, version: 1, exportedAt: new Date().toISOString(), source: 'LyricCode Web 版', songs, playlists };
+    downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), 'LyricCode 全曲.json');
+    statusEl.textContent = `${songs.length} 曲とプレイリスト ${playlists.length} 件を書き出しました`;
   }
 
   // 取り込み：アプリ版の「Web 版へ書き出す」のファイル（.json）と、.lct・.txt（いくつでも選べる）
@@ -687,6 +804,7 @@
 
   function updatePlayBar() {
     playBar.hidden = !playing;
+    document.body.classList.toggle('playing', !!playing);
     if (!playing) return;
     const p = library.getPlaylist(playing.id);
     if (!p || !p.songs.length) { stopPlaylist(false); return; }
@@ -749,6 +867,7 @@
     const { id, prevMode } = playing;
     playing = null;
     playBar.hidden = true;
+    document.body.classList.remove('playing');
     if (editor.mode !== prevMode) {
       editor.mode = prevMode;
       updateSplitBar();
@@ -771,11 +890,14 @@
   }
 
   playBar.addEventListener('click', (e) => {
+    // 曲名をタップすると、ライトとダークを切り替える（iPad のアプリ版と同じ）
+    if (e.target.closest('.play-title')) { setAppearance(appearance === 'dark' ? 'light' : 'dark'); return; }
     const b = e.target.closest('button');
     if (!b) return;
     if (b.dataset.play === 'prev') playStep(-1);
     else if (b.dataset.play === 'next') playStep(1);
     else if (b.dataset.play === 'exit') stopPlaylist(true);
+    else if (b.dataset.cmd) run(b.dataset.cmd);
   });
   // 帯のボタンを押しても、エディタの入力欄からフォーカスを外さない
   playBar.addEventListener('pointerdown', (e) => {
@@ -1131,10 +1253,65 @@
     updateSplitBar();
   }
 
+  // 文字の大きさ：1 回で ±2（10～44。標準は 18。iPad のアプリ版と同じ）
   function zoom(d) {
     editor.fontSize = d === 0 ? LC.DEFAULT_FONT_SIZE : editor.fontSize + d * 2;
+    updateToolbar();
     saveSettings();
   }
+
+  // パレットの「直接入力」：コード名を入れる（空にするとコードを削除）
+  async function editChordFromPalette() {
+    const t = editor.targetChord();
+    const s = await UI.prompt('コード名を入力', '例: C#m7/G#（空にするとコードを削除します）', t ? t.chord.name : '');
+    if (s !== null) editor.paletteOp('rename', s);
+    editor.focusEditor();
+  }
+
+  // テキストで編集：コードだけの行を歌詞の行の上に書いた形で、全体をまとめて直す（点滅・色・太字は消える）
+  async function textEdit() {
+    if (editor.mode === 'view') {
+      await UI.message('テキストで編集', '閲覧モードでは使えません。編集のモードにしてから選んでください。');
+      return;
+    }
+    const before = editor.getSheetText(false).replace(/\r\n/g, '\n');
+    const text = await UI.custom('テキストで編集', (body, buttons, finish) => {
+      body.innerHTML = '<p class="hint">コードだけの行を、対応する歌詞の行のすぐ上に書きます。' +
+        'コードの位置は空白で合わせます（半角 1 文字＝1 桁、全角 1 文字＝2 桁）。点滅・コードの色・歌詞の太字は消えます。</p>' +
+        '<textarea class="text-edit" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea>';
+      const ta = body.querySelector('textarea');
+      ta.value = before;
+      const pasteBtn = UI.addButton(buttons, 'クリップボードから貼り付け', false, async () => {
+        try {
+          const s = await navigator.clipboard.readText();
+          if (s) ta.value = ta.value === '' ? s : ta.value.replace(/\n?$/, '\n') + s;
+        } catch (e) {
+          ta.focus();
+        }
+      });
+      pasteBtn.classList.add('left');
+      UI.addButton(buttons, 'キャンセル', false, () => finish(null));
+      UI.addButton(buttons, '完了', true, () => finish(ta.value));
+    }, null, true);
+    if (text !== null && text !== before) editor.replaceAll(text);
+    editor.focusEditor();
+  }
+
+  // ---- 画面を消さない（前面にいる間。iPad のアプリ版と同じ。明るさはブラウザからは変えられない） ----
+
+  let wakeLock = null;
+  async function keepAwake() {
+    if (!('wakeLock' in navigator) || document.visibilityState !== 'visible' || wakeLock) return;
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } catch (e) {
+      wakeLock = null;
+    }
+  }
+  document.addEventListener('visibilitychange', keepAwake);
+  // ブラウザによっては、画面を触ってからでないと頼めない
+  document.addEventListener('pointerdown', keepAwake, { passive: true });
 
   function help() {
     const t = (rows) => '<table>' + rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
@@ -1153,13 +1330,25 @@
         ['右クリック・長押し', '空いた位置では基音・小節線・音符を選択、コードの上では種類（m, 7, m7, maj7, dim など）を選択'],
         ['Enter・ダブルクリック', 'コード名を直接入力'],
         ['右クリック・長押し（コードの上）', '点滅させる・色を付ける（この行のコードすべてにもできます）'],
+        ['右クリック・長押し', '範囲コピー・貼り付け・範囲を選んで点滅／色（終わりの位置のコード行をタップして決める）'],
         ['Delete / BackSpace', '削除 / 末尾を 1 文字削除'],
         ['ドラッグ・Shift+矢印', 'コードを移動（矢印だけなら入力位置を移動）'],
         ['', '歌詞のない所や最終行より下にも入力できます（行は自動で追加）'],
         ['日本語入力', 'オンのままでもコードを入力できます'],
       ]) +
+      '<h3>コードパレット（iPad など指で操作するとき。「表示」→「コードパレット」）</h3>' +
+      '<p>コード行をタップすると、下にパレットが出ます（iPad のアプリ版と同じ）。C～B で基音、♯♭、種類（m・7・m7 など）、' +
+      '音符・小節線・||:・:||・ベース音・直接入力・削除を選べます。「入力後に右へ」がオンなら、置いた後に入力位置が 1 桁空けて右へ進み、' +
+      '続けて種類を押すと直前のコードに付きます（A → m → 7 で Am7）。' +
+      '‹ › で入力位置、← → でコードを動かします（「右側も一緒に」で同じ行の右側のコードもまとめて動かす。ドラッグでも同じ）。⏮ ⏭ で前後のコードへ。' +
+      '「範囲コピー」「点滅」「色」は、始まりが今の位置で、終わりの位置のコード行をタップして範囲を決めます（「行で選ぶ」で行ごと）。' +
+      'パレットを使うときは、コード入力で画面のキーボードは出ません。</p>' +
       '<h3>自由文字入力（Ctrl+Shift+F・ツールバーの「自由文字」）</h3>' +
       '<p>コード行に、打った文字（サビ、×2、rit. など）をそのまま置きます。空白で次の位置へ進みます。</p>' +
+      '<h3>歌詞の行・テキストで編集・文字の大きさ・画面</h3>' +
+      '<p>「編集」→「上に行を挿入」「下に行を挿入」「行を削除」。「テキストで編集...」では、コード行と歌詞行をテキストのまま全体を直せます（点滅・色・太字は消えます）。' +
+      '文字の大きさは A− / A＋ か 2 本指のピンチで変えます（全曲共通）。「表示」→「画面の明るさ」でライト / ダークを選べます' +
+      '（プレイリストの表示中は、上の帯の曲名をタップしても切り替わります）。開いている間は画面を消さないようにします。</p>' +
       '<h3>ショートカット</h3>' +
       t([
         ['Alt+L / Alt+P / Alt+N', '曲の一覧 / プレイリスト / 新しい曲'],
@@ -1173,7 +1362,8 @@
         [CTRL + '+ / ' + CTRL + '- / ' + CTRL + '0', '拡大 / 縮小 / 標準サイズ（' + CTRL + 'ホイールでも拡大縮小）'],
       ]) +
       '<h3>曲の一覧（「☰ 曲の一覧」・右上の曲名）</h3>' +
-      '<p>曲はすべてブラウザの中に自動で保存されます（保存の操作は要りません）。一覧から曲を開く・新しい曲を作る・名前を変える・削除するができます。' +
+      '<p>曲はすべてブラウザの中に自動で保存されます（保存の操作は要りません）。一覧から曲を開く・新しい曲を作る・名前を変える・複製する・' +
+      'ファイルとして送る（iPad では AirDrop など）・削除するができます。「ファイル」→「全曲を書き出す」で全曲を 1 つのファイルに残せます（「取り込む...」で戻せます）。' +
       'コードの点滅・色と歌詞の太字も曲と一緒に保存されます（.lct には入らないので、Windows 版やファイルに保存したときには付きません）。</p>' +
       '<h3>プレイリスト（「♫ プレイリスト」・Alt+P）</h3>' +
       '<p>演奏する順に曲を並べておき、閲覧で 1 曲ずつ表示します（iPad のアプリ版と同じ）。' +
@@ -1221,6 +1411,12 @@
     transposeDown: () => { editor.transposeAll(-1); editor.focusEditor(); },
     freeText: toggleFreeText,
     bold: toggleBold,
+    textEdit,
+    exportAll,
+    insertAbove: () => { editor.insertLine(false); editor.focusEditor(); },
+    insertBelow: () => { editor.insertLine(true); editor.focusEditor(); },
+    deleteLine: () => { editor.deleteLine(); editor.focusEditor(); },
+    palette: () => { setPaletteEnabled(!palette.enabled); saveSettings(); editor.focusEditor(); },
     zoomIn: () => zoom(1),
     zoomOut: () => zoom(-1),
     zoomReset: () => zoom(0),
@@ -1243,6 +1439,7 @@
       { label: 'ファイルに保存...', shortcut: CTRL + 'Shift+S', cmd: 'saveAs' },
       '-',
       { label: 'PDF を読み込む...', shortcut: CTRL + 'I', cmd: 'importPdf' },
+      { label: '全曲を書き出す（バックアップ）', cmd: 'exportAll' },
       '-',
       { label: '他の端末との同期...', cmd: 'sync' },
     ],
@@ -1252,7 +1449,12 @@
       '-',
       { label: '歌詞を貼り付け', shortcut: CTRL + 'V', cmd: 'paste' },
       { label: '全体をテキストとしてコピー', shortcut: CTRL + 'Shift+E', cmd: 'copyAll' },
+      { label: 'テキストで編集...', cmd: 'textEdit', disabled: editor.mode === 'view' },
       { label: '文字化けを修復...', cmd: 'repair' },
+      '-',
+      { label: '上に行を挿入', cmd: 'insertAbove', disabled: editor.mode === 'view' },
+      { label: '下に行を挿入', cmd: 'insertBelow', disabled: editor.mode === 'view' },
+      { label: '行を削除', cmd: 'deleteLine', disabled: editor.mode === 'view' },
       '-',
       { label: '移調 ＋半音', shortcut: CTRL + 'Shift+↑', cmd: 'transposeUp' },
       { label: '移調 －半音', shortcut: CTRL + 'Shift+↓', cmd: 'transposeDown' },
@@ -1264,6 +1466,15 @@
       label: MODE_NAMES[m], shortcut: 'Alt+' + (i + 1), checked: editor.mode === m, onClick: () => setMode(m),
     })),
     view: () => [
+      {
+        label: '画面の明るさ',
+        submenu: [
+          { label: '☀ ライト', checked: appearance === 'light', onClick: () => setAppearance('light') },
+          { label: '☾ ダーク', checked: appearance === 'dark', onClick: () => setAppearance('dark') },
+        ],
+      },
+      { label: 'コードパレット（指で操作するとき）', checked: palette.enabled, cmd: 'palette' },
+      '-',
       { label: '左右 2 列（横長の画面の閲覧）', checked: editor.splitEnabled, onClick: toggleSplit },
       { label: '分割位置を変える...', disabled: !editor.twoColumn, onClick: chooseSplit },
       '-',

@@ -6,8 +6,10 @@
   const FLAT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
   const MENU_NOTES = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab',
     'A', 'A#', 'Bb', 'B'];
-  const NOTE_SYMBOLS = ['♩', '♪', '♫', '♬'];
+  const NOTE_SYMBOLS = ['○', '♩', '♪', '♫', '♬'];
   const BAR_LINE = '|';
+  /** 繰り返し記号（空いている位置にだけ置く。iPad のアプリ版と同じ） */
+  const REPEAT_MARKS = ['||:', ':||'];
 
   const MAIN_QUALITY_COUNT = 14;
   const QUALITIES = [
@@ -93,7 +95,7 @@
 
   // コード行に置ける語か（コード名・小節線・数字・音符）
   function isChordToken(t) {
-    if (t === 'N.C.' || t === 'NC' || t === '|' || t === '||') return true;
+    if (t === 'N.C.' || t === 'NC' || t === '|' || t === '||' || REPEAT_MARKS.includes(t)) return true;
     if (/^[0-9]+$/.test(t)) return true;
     if (isNoteSymbol(t)) return true;
     const c = parseChord(t);
@@ -123,7 +125,7 @@
   }
 
   LC.Chord = {
-    SHARP_NAMES, FLAT_NAMES, MENU_NOTES, NOTE_SYMBOLS, BAR_LINE, QUALITIES, MAIN_QUALITY_COUNT,
+    SHARP_NAMES, FLAT_NAMES, MENU_NOTES, NOTE_SYMBOLS, BAR_LINE, REPEAT_MARKS, QUALITIES, MAIN_QUALITY_COUNT,
     parseChord, buildChord, noteIndex, transposeNote, transposeChord, toggleAccidental,
     isNoteSymbol, isChordToken, isChordLine, normalizeChordName,
   };

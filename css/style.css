@@ -1,14 +1,45 @@
+/* 色は iPad のアプリ版に合わせる（アクセントは #1040B0 / ダークでは #7FA8FF）。
+   画面の明るさは「表示」→「画面の明るさ」で選ぶ（端末の設定には合わせない。アプリ版と同じ） */
 :root {
-  --bg: #F4F5F7;
+  --bg: #F2F2F7;
   --panel: #FFFFFF;
+  --paper: #FFFFFF;
   --border: #D5D8DE;
   --text: #1F2328;
   --muted: #5B6470;
-  --accent: #2B4A8A;
+  --accent: #1040B0;
+  --accent-fill: #1040B0;   /* 押された状態のボタンの背景（白い文字） */
   --accent-weak: #DCE5F6;
+  --current: #EAF1FF;       /* 一覧の今の曲・プレイリストの帯 */
   --hover: #E9ECF1;
+  --danger: #C00000;
+  --ok: #1F7A1F;
+  --free: #309030;
+  --chord: #B88A00;         /* コードの標準の色（黄） */
   --menu-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  --disabled: #A0A6AE;
   color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #000000;
+  --panel: #1C1C1E;
+  --paper: #000000;
+  --border: #3A3A3C;
+  --text: #F2F2F7;
+  --muted: #98989F;
+  --accent: #7FA8FF;
+  --accent-fill: #2F5FC8;
+  --accent-weak: #22324F;
+  --current: #1A2740;
+  --hover: #2C2C2E;
+  --danger: #FF6961;
+  --ok: #5CC46A;
+  --free: #3E9A4C;
+  --chord: #FFD60A;
+  --menu-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+  --disabled: #5A5A60;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -94,9 +125,9 @@ button {
   padding: 4px 10px;
 }
 .sync-btn:hover { background: var(--hover); }
-.sync-btn[data-kind="ok"] { color: #1F7A1F; }
+.sync-btn[data-kind="ok"] { color: var(--ok); }
 .sync-btn[data-kind="busy"] { color: var(--accent); }
-.sync-btn[data-kind="error"], .sync-btn[data-kind="conflict"] { color: #C00000; border-color: #E3A1A1; background: #FFF3F3; }
+.sync-btn[data-kind="error"], .sync-btn[data-kind="conflict"] { color: var(--danger); border-color: var(--danger); }
 .sync-btn[data-kind="off"] { color: var(--muted); }
 
 @media (max-width: 600px) {
@@ -135,13 +166,13 @@ button {
 .toolbar button:hover { background: var(--hover); }
 
 .toolbar button[aria-pressed="true"] {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
   color: #FFFFFF;
   position: relative;
 }
 
-.toolbar button.toggle[aria-pressed="true"] { background: #309030; border-color: #309030; }
+.toolbar button.toggle[aria-pressed="true"] { background: var(--free); border-color: var(--free); }
 
 .touch-only { display: none !important; }
 @media (pointer: coarse) {
@@ -156,7 +187,7 @@ button {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  background: #FFFFFF;
+  background: var(--paper);
 }
 
 .lc-canvas {
@@ -204,10 +235,10 @@ button {
   z-index: 3;
   opacity: 1;
   min-width: 1em;
-  color: #000000;
-  background: #FFFFFF;
-  box-shadow: 0 0 0 1px #8899BB;
-  caret-color: #000000;
+  color: var(--text);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--accent);
+  caret-color: var(--text);
 }
 
 /* ---- ステータスバー ---- */
@@ -255,7 +286,7 @@ button {
 .popup-menu .mi.active,
 .popup-menu .mi:hover:not(.disabled) { background: var(--accent-weak); }
 
-.popup-menu .mi.disabled { color: #A0A6AE; cursor: default; }
+.popup-menu .mi.disabled { color: var(--disabled); cursor: default; }
 .popup-menu .mi.header { color: var(--muted); font-weight: 600; }
 
 .popup-menu .check { width: 16px; text-align: center; color: var(--accent); }
@@ -323,19 +354,19 @@ button {
   background: var(--panel);
 }
 
-.dlg-buttons button.primary { background: var(--accent); border-color: var(--accent); color: #FFFFFF; }
+.dlg-buttons button.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: #FFFFFF; }
 
 .help h3 { margin: 14px 0 6px; font-size: 14px; }
 .help h3:first-child { margin-top: 4px; }
 .help table { border-collapse: collapse; width: 100%; }
-.help td { padding: 3px 6px; border-bottom: 1px solid #EEF0F3; vertical-align: top; }
+.help td { padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .help td:first-child { white-space: nowrap; color: var(--accent); font-weight: 600; width: 1%; }
 .help p { margin: 4px 0; }
 
 /* ---- 同期の画面 ---- */
 
 .dlg-body .sync-state { color: var(--accent); margin: 8px 0; }
-.dlg-body .token-area .shared { color: #1F7A1F; font-weight: 600; }
+.dlg-body .token-area .shared { color: var(--ok); font-weight: 600; }
 .dlg-body .steps { padding-left: 1.4em; margin: 6px 0 10px; color: var(--muted); }
 .dlg-body .steps a { color: var(--accent); }
 .dlg-body .note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
@@ -361,7 +392,7 @@ button {
   padding: 8px;
   max-height: 40dvh;
   overflow: auto;
-  background: #F7F8FA;
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   font: 13px/1.5 "MS Gothic", "Osaka-Mono", "Hiragino Sans", monospace;
@@ -403,7 +434,7 @@ button {
   padding: 2px 4px;
 }
 .dlg-body .song:last-child { border-bottom: 0; }
-.dlg-body .song.current { background: #EAF1FF; }
+.dlg-body .song.current { background: var(--current); }
 .dlg-body .song-open {
   flex: 1;
   min-width: 0;
@@ -426,7 +457,7 @@ button {
   border-radius: 6px;
   padding: 3px 8px;
 }
-.dlg-body .song-tool.danger { color: #C00000; }
+.dlg-body .song-tool.danger { color: var(--danger); }
 
 /* ---- 左右 2 列の分割位置を選んでいる間のバー ---- */
 
@@ -448,7 +479,7 @@ button {
   padding: 5px 12px;
   min-height: 32px;
 }
-.split-bar button.primary { background: var(--accent); border-color: var(--accent); color: #FFFFFF; }
+.split-bar button.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: #FFFFFF; }
 
 /* ---- プレイリスト ---- */
 
@@ -458,7 +489,7 @@ button {
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
-  background: #EAF1FF;
+  background: var(--current);
   border-bottom: 1px solid var(--border);
 }
 .play-bar[hidden] { display: none; }
@@ -497,16 +528,16 @@ button {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-.dlg-body .song-missing { margin-left: 10px; color: #C00000; font-size: 12px; }
+.dlg-body .song-missing { margin-left: 10px; color: var(--danger); font-size: 12px; }
 .dlg-body .song-tool:disabled { opacity: 0.3; cursor: default; }
 .dlg-body .pl-play {
   display: block;
   width: 100%;
   margin: 2px 0 10px;
   padding: 10px 14px;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--accent-fill);
   border-radius: 8px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: #FFFFFF;
   font-weight: 700;
   text-align: left;
@@ -521,9 +552,170 @@ button {
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  border: 1.5px solid #B8BEC8;
+  border: 1.5px solid var(--muted);
   font-size: 12px;
   font-weight: 700;
   flex: none;
 }
-.dlg-body .song.picked .pick-num { background: var(--accent); border-color: var(--accent); color: #FFFFFF; }
+.dlg-body .song.picked .pick-num { background: var(--accent-fill); border-color: var(--accent-fill); color: #FFFFFF; }
+
+/* ---- ダークのときのダイアログ・入力欄 ---- */
+
+.dlg { background: var(--panel); }
+.dlg-body input[type="text"],
+.dlg-body input[type="password"],
+.dlg-body input[type="search"],
+.dlg-body textarea {
+  background: var(--paper);
+  color: var(--text);
+}
+
+/* ---- 文字の大きさ（A−  18  A＋） ---- */
+
+.zoom { display: flex; align-items: center; }
+.zoom .font-size {
+  min-width: 2.4em;
+  text-align: center;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.toolbar .group.zoom .font-size {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  margin-left: -1px;
+}
+.toolbar .group.zoom button { font-weight: 600; }
+.play-bar .zoom button { padding: 4px 10px; font-weight: 600; }
+.play-bar .play-title { cursor: pointer; }
+
+/* プレイリストを表示している間は、ツールバーを隠して譜面を広く見せる（iPad のアプリ版と同じ） */
+body.playing .toolbar { display: none; }
+
+/* ---- コードパレット（iPad のアプリ版の下に出るパレット） ---- */
+
+.chord-palette,
+.range-bar {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 10px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.chord-palette[hidden], .range-bar[hidden] { display: none; }
+.chord-palette [hidden] { display: none !important; }
+.chord-palette button,
+.range-bar button {
+  font: inherit;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
+  min-height: 32px;
+  white-space: nowrap;
+}
+.chord-palette button:disabled,
+.range-bar button:disabled { opacity: 0.4; cursor: default; }
+.chord-palette button.cur { color: var(--accent); border-color: var(--accent); font-weight: 700; }
+.chord-palette button.primary,
+.range-bar button.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: #FFFFFF; }
+
+.cp-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cp-name { font-size: 17px; font-weight: 600; min-width: 3em; }
+.cp-name .cp-chord { color: var(--chord); }
+.cp-name .cp-empty { color: var(--muted); font-weight: 400; }
+.cp-name .cp-last { margin-left: 8px; color: var(--chord); font-size: 14px; }
+.cp-line { color: var(--muted); font-size: 12px; }
+.cp-spacer { flex: 1; }
+.cp-check { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); cursor: pointer; white-space: nowrap; }
+.cp-check.small { font-size: 11px; color: var(--muted); }
+.cp-check.small.on { color: var(--accent); }
+.cp-grp { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.cp-cap { font-size: 11px; color: var(--muted); }
+.cp-pair { display: flex; gap: 4px; }
+.chord-palette .cp-arrow { min-width: 34px; min-height: 26px; padding: 0 6px; }
+.chord-palette .cp-close { border: 0; background: none; font-size: 20px; color: var(--muted); padding: 0 4px; }
+
+.cp-roots { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; }
+.chord-palette .cp-root { min-height: 40px; font-size: 19px; font-weight: 600; }
+.cp-quals, .cp-scroll { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.cp-quals::-webkit-scrollbar, .cp-scroll::-webkit-scrollbar { display: none; }
+.cp-quals.off { opacity: 0.4; }
+.chord-palette .cp-qual { min-width: 44px; }
+.cp-quals > button, .cp-scroll > button { flex: none; }
+.cp-free { display: flex; gap: 8px; }
+.cp-free input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--text);
+}
+.cp-others { display: flex; gap: 8px; align-items: center; }
+.cp-others .cp-scroll { flex: 1; }
+.chord-palette .cp-tool.on { background: var(--free); border-color: var(--free); color: #FFFFFF; }
+.chord-palette .cp-tool.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.chord-palette .cp-tool.danger { color: var(--danger); }
+
+/* ---- 範囲選択のバー（範囲コピー・点滅・色） ---- */
+
+.range-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.range-bar .seg { display: flex; max-width: 260px; }
+.range-bar .seg button { border-radius: 0; margin-left: -1px; }
+.range-bar .seg button:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
+.range-bar .seg button:last-child { border-radius: 0 8px 8px 0; }
+.range-bar .seg button.cur { background: var(--accent-fill); border-color: var(--accent-fill); color: #FFFFFF; }
+.range-actions { display: flex; gap: 6px; align-items: center; }
+.range-bar .swatch { width: 26px; min-height: 26px; height: 26px; padding: 0; border-radius: 50%; border: 1px solid var(--border); }
+.range-info { color: var(--muted); font-size: 13px; }
+
+/* ---- 上に出るお知らせ（2.5 秒で消える） ---- */
+
+.toast {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 48px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 900;
+  max-width: calc(100vw - 32px);
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+.toast[hidden] { display: none; }
+
+/* ---- テキストで編集 ---- */
+
+.dlg-body .text-edit {
+  display: block;
+  width: 100%;
+  height: 50dvh;
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 14px/1.5 ui-monospace, "SF Mono", Menlo, "MS Gothic", "Osaka-Mono", monospace;
+  white-space: pre;
+  resize: vertical;
+}
+.dlg-body .hint { color: var(--muted); font-size: 12px; margin: 0 0 4px; }

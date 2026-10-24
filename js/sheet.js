@@ -41,7 +41,8 @@
       if (index >= 0 && index < this.chords.length) this.chords.splice(index, 1);
     }
 
-    // 桁位置順に並べ（同じ桁は元の順のまま）、重なったコードは後ろへずらす
+    // 桁位置順に並べ（同じ桁は元の順のまま）、重なったコードは後ろへずらす。
+    // 前のコードとの間には空白を 1 つ空ける（.lct に書いたときと同じ位置。iPad のアプリ版と同じ）
     normalize() {
       const a = this.chords;
       for (let i = 1; i < a.length; i++) {
@@ -52,9 +53,83 @@
       }
       for (let i = 0; i < a.length; i++) {
         if (a[i].col < 0) a[i].col = 0;
-        if (i > 0 && a[i].col <= a[i - 1].col) a[i].col = a[i - 1].col + 1;
+        if (i > 0) {
+          const min = a[i - 1].col + a[i - 1].name.length + 1;
+          if (a[i].col < min) a[i].col = min;
+        }
       }
     }
+
+    /**
+     * コード index と、同じ行でそれより右のコードをまとめて d 桁動かす（「右側も一緒に」。歌詞は動かさない）。
+     * 左端より左へ出る・前のコードとの間に空白 1 つが取れないときは動かさず false
+     */
+    shiftChords(index, d) {
+      if (!this.canShift(index, d)) return false;
+      for (let i = index; i < this.chords.length; i++) this.chords[i].col += d;
+      return true;
+    }
+
+    canShift(index, d) {
+      const a = this.chords;
+      if (index < 0 || index >= a.length || d === 0) return false;
+      if (a[index].col + d < 0) return false;
+      return !(index > 0 && a[index].col + d < a[index - 1].col + a[index - 1].name.length + 1);
+    }
+  }
+
+  // ---- 範囲（範囲コピー・点滅・色。iPad のアプリ版の「自由に選ぶ / 行で選ぶ」） ----
+  // a, b は { line, col }。読む順に並べ、1 行目は a の桁から、間の行はまるごと、最後の行は b の桁まで（両端を含む）
+
+  function orderRange(a, b) {
+    return (a.line < b.line || (a.line === b.line && a.col <= b.col)) ? [a, b] : [b, a];
+  }
+
+  /** 範囲に入るコード [{ line, index }]。byLine なら行をまるごと */
+  function chordsInRange(lines, a, b, byLine) {
+    const [s, e] = orderRange(a, b);
+    const r = [];
+    for (let l = Math.max(0, s.line); l <= e.line && l < lines.length; l++) {
+      lines[l].chords.forEach((c, i) => {
+        if (!byLine && l === s.line && c.col < s.col) return;
+        if (!byLine && l === e.line && c.col > e.col) return;
+        r.push({ line: l, index: i });
+      });
+    }
+    return r;
+  }
+
+  /** 範囲のコードを写す（貼り付けで使う）。{ wholeLines, rows: [{ chords, length }] } */
+  function copyChords(lines, a, b, byLine) {
+    const [s, e] = orderRange(a, b);
+    const rows = [];
+    for (let l = s.line; l <= e.line; l++) {
+      const from = !byLine && l === s.line ? s.col : 0;
+      const to = !byLine && l === e.line ? e.col : Infinity;
+      const src = l < lines.length ? lines[l].chords : [];
+      rows.push({
+        chords: src.filter((c) => c.col >= from && c.col <= to).map((c) => ({ ...copyChord(c), col: c.col - from })),
+        length: to === Infinity ? null : to - from + 1,
+      });
+    }
+    return { wholeLines: !!byLine, rows };
+  }
+
+  /**
+   * 写したコードを (line, col) に貼り付ける。1 行目は col から（行で選んだときは 0 から）、2 行目以降は行の先頭から。
+   * 貼る範囲にあったコードは消す。歌詞は変えない。足りない行は足す
+   */
+  function pasteChords(lines, clip, line, col) {
+    clip.rows.forEach((row, k) => {
+      const l = line + k;
+      while (lines.length <= l) lines.push(new SheetLine());
+      const start = k === 0 && !clip.wholeLines ? col : 0;
+      const end = row.length == null ? Infinity : start + row.length;
+      const target = lines[l];
+      target.chords = target.chords.filter((c) => c.col < start || c.col >= end);
+      for (const c of row.chords) target.chords.push({ ...copyChord(c), col: c.col + start });
+      target.normalize();
+    });
   }
 
   function copyChord(c) {
@@ -192,6 +267,6 @@
 
   LC.Sheet = {
     SheetLine, HEADER, parseChordLine, buildChordLine, getSheetText, parseSheetText, splitLines,
-    copyChord, getStyle, applyStyle, hasStyle,
+    copyChord, getStyle, applyStyle, hasStyle, chordsInRange, copyChords, pasteChords,
   };
 })(window.LC = window.LC || {});
