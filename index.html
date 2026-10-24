@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>LyricCode</title>
+  <meta name="description" content="歌詞の上にコードを併記するエディタ">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="LyricCode">
+  <meta name="theme-color" content="#2B4A8A">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="titlebar">
+    <div class="app-name">LyricCode <small id="appVersion" class="version"></small></div>
+    <nav class="menubar" aria-label="メニュー">
+      <button type="button" data-menu="file">ファイル</button>
+      <button type="button" data-menu="edit">編集</button>
+      <button type="button" data-menu="mode">モード</button>
+      <button type="button" data-menu="view">表示</button>
+      <button type="button" data-menu="help">ヘルプ</button>
+    </nav>
+    <div class="doc-title" id="docTitle">無題</div>
+    <button type="button" id="syncBtn" class="sync-btn" data-kind="off" title="他の端末との同期">☁ <span id="syncText">同期: オフ</span></button>
+  </header>
+
+  <div class="toolbar" role="toolbar" aria-label="ツールバー">
+    <div class="group" role="group" aria-label="モード">
+      <button type="button" class="mode" data-mode="lyric" title="歌詞編集 (Alt+1)">歌詞</button>
+      <button type="button" class="mode" data-mode="chord" title="コード編集 (Alt+2)">コード</button>
+      <button type="button" class="mode" data-mode="both" title="歌詞＋コード編集 (Alt+3)">歌詞＋コード</button>
+      <button type="button" class="mode" data-mode="view" title="閲覧 (Alt+4)">閲覧</button>
+    </div>
+    <button type="button" id="freeTextBtn" class="toggle" title="自由文字入力 (Ctrl+Shift+F)">自由文字</button>
+    <div class="group" role="group" aria-label="移調">
+      <button type="button" data-cmd="transposeDown" title="全コードを半音下げる (Ctrl+Shift+↓)">移調 ♭</button>
+      <button type="button" data-cmd="transposeUp" title="全コードを半音上げる (Ctrl+Shift+↑)">移調 ♯</button>
+    </div>
+    <div class="group" role="group" aria-label="文字の大きさ">
+      <button type="button" data-cmd="zoomOut" title="縮小 (Ctrl+-)">－</button>
+      <button type="button" data-cmd="zoomIn" title="拡大 (Ctrl++)">＋</button>
+    </div>
+    <div class="group touch-only" role="group" aria-label="編集">
+      <button type="button" data-cmd="undo" title="元に戻す">↶</button>
+      <button type="button" data-cmd="redo" title="やり直し">↷</button>
+      <button type="button" data-cmd="paste" title="歌詞を貼り付け">貼り付け</button>
+    </div>
+  </div>
+
+  <main id="editorHost" class="editor-host"></main>
+
+  <footer class="statusbar" id="status" aria-live="polite"></footer>
+
+  <input type="file" id="openInput" accept=".lct,.txt,text/plain" hidden>
+  <input type="file" id="pdfInput" accept=".pdf,application/pdf" hidden>
+
+  <script src="js/chord.js"></script>
+  <script src="js/text.js"></script>
+  <script src="js/sheet.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/editor.js"></script>
+  <script src="js/pdfimport.js"></script>
+  <script src="js/cloud.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
