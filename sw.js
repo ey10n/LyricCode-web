@@ -7,7 +7,7 @@
 //
 // 公開し直すときは CACHE の番号と、js/app.js の APP_VERSION を同じ番号に上げる。
 
-const CACHE = 'lyriccode-v7';
+const CACHE = 'lyriccode-v8';
 const ASSETS = [
   './',
   'index.html',
@@ -23,10 +23,10 @@ const ASSETS = [
   'js/pdfimport.js',
   'js/cloud.js',
   'js/app.js',
-  'icons/icon-32.png',
-  'icons/icon-192.png',
-  'icons/icon-512.png',
-  'icons/apple-touch-icon.png',
+  'icons/web-icon-32.png',
+  'icons/web-icon-192.png',
+  'icons/web-icon-512.png',
+  'icons/web-apple-touch-icon.png',
 ];
 
 self.addEventListener('install', (e) => {
