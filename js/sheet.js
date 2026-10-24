@@ -1,5 +1,7 @@
 /* 文書のデータ構造と .lct 形式の読み書き（Lazarus 版 lyricchordeditor.pas から移植）
-   1 行 = 歌詞の文字列 + コードの並び。コードの位置 col は半角 1・全角 2 のセル単位 */
+   1 行 = 歌詞の文字列 + コードの並び。コードの位置 col は半角 1・全角 2 のセル単位。
+   コードの点滅（blink）・色（color）と歌詞の太字（bold）は .lct に書かない（Windows 版で読めなくなるため）。
+   曲の一覧の中に「飾り」として別に持つ（iPad のアプリ版と同じ考え方） */
 (function (LC) {
   'use strict';
 
@@ -7,25 +9,30 @@
   const HEADER = '#LyricCode 1';
 
   class SheetLine {
-    constructor(text = '', chords = []) {
+    constructor(text = '', chords = [], bold = null) {
       this.text = text;
-      this.chords = chords; // [{ col, name }]
+      this.chords = chords; // [{ col, name, blink?, color? }]
+      this.bold = bold || new Set(); // 太字にした歌詞の文字の位置（UTF-16 の位置）
     }
 
     clone() {
-      return new SheetLine(this.text, this.chords.map((c) => ({ col: c.col, name: c.name })));
+      return new SheetLine(this.text, this.chords.map(copyChord), new Set(this.bold));
     }
 
     findChordCol(col) {
       return this.chords.findIndex((c) => c.col === col);
     }
 
-    appendChord(col, name) {
-      this.chords.push({ col, name });
+    // attrs: 元のコードの点滅・色を引き継ぐとき、そのコード
+    appendChord(col, name, attrs) {
+      const c = { col, name };
+      if (attrs && attrs.blink) c.blink = true;
+      if (attrs && attrs.color) c.color = attrs.color;
+      this.chords.push(c);
     }
 
-    addChord(col, name) {
-      this.appendChord(col, name);
+    addChord(col, name, attrs) {
+      this.appendChord(col, name, attrs);
       this.normalize();
       return this.findChordCol(col);
     }
@@ -48,6 +55,60 @@
         if (i > 0 && a[i].col <= a[i - 1].col) a[i].col = a[i - 1].col + 1;
       }
     }
+  }
+
+  function copyChord(c) {
+    const r = { col: c.col, name: c.name };
+    if (c.blink) r.blink = true;
+    if (c.color) r.color = c.color;
+    return r;
+  }
+
+  // ---- 飾り（点滅・コードの色・歌詞の太字） ----
+  // 曲の一覧に持つ形は iPad のアプリ版の書き出しと同じ：
+  //   { blinking: [{line, col}], chordColors: [{line, col, color}], boldLyrics: [{line, from, to}] }
+  // line は行の番号、col はコードの桁、from・to は歌詞の UTF-16 の位置（from を含み to を含まない）
+
+  function getStyle(lines) {
+    const blinking = [], chordColors = [], boldLyrics = [];
+    lines.forEach((l, i) => {
+      for (const c of l.chords) {
+        if (c.blink) blinking.push({ line: i, col: c.col });
+        if (c.color) chordColors.push({ line: i, col: c.col, color: c.color });
+      }
+      const idx = [...l.bold].filter((k) => k < l.text.length).sort((a, b) => a - b);
+      for (const k of idx) {
+        const last = boldLyrics[boldLyrics.length - 1];
+        if (last && last.line === i && last.to === k) last.to = k + 1;
+        else boldLyrics.push({ line: i, from: k, to: k + 1 });
+      }
+    });
+    const r = {};
+    if (blinking.length) r.blinking = blinking;
+    if (chordColors.length) r.chordColors = chordColors;
+    if (boldLyrics.length) r.boldLyrics = boldLyrics;
+    return r;
+  }
+
+  function applyStyle(lines, style) {
+    if (!style) return;
+    const chordAt = (r) => {
+      const l = lines[r.line];
+      if (!l) return null;
+      const i = l.findChordCol(r.col);
+      return i >= 0 ? l.chords[i] : null;
+    };
+    for (const r of style.blinking || []) { const c = chordAt(r); if (c) c.blink = true; }
+    for (const r of style.chordColors || []) { const c = chordAt(r); if (c && r.color) c.color = r.color; }
+    for (const r of style.boldLyrics || []) {
+      const l = lines[r.line];
+      if (!l) continue;
+      for (let k = Math.max(0, r.from); k < Math.min(r.to, l.text.length); k++) l.bold.add(k);
+    }
+  }
+
+  function hasStyle(style) {
+    return !!style && ['blinking', 'chordColors', 'boldLyrics'].some((k) => (style[k] || []).length);
   }
 
   // コード行の文字列を読む（空白で区切った語の先頭の桁がコードの位置）。
@@ -132,5 +193,8 @@
     return lines;
   }
 
-  LC.Sheet = { SheetLine, HEADER, parseChordLine, buildChordLine, getSheetText, parseSheetText, splitLines };
+  LC.Sheet = {
+    SheetLine, HEADER, parseChordLine, buildChordLine, getSheetText, parseSheetText, splitLines,
+    copyChord, getStyle, applyStyle, hasStyle,
+  };
 })(window.LC = window.LC || {});

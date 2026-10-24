@@ -88,6 +88,7 @@
       const label = document.createElement('span');
       label.className = 'label';
       label.textContent = it.label;
+      if (it.color) label.style.color = it.color;
       el.append(check, label);
       if (it.shortcut) {
         const sc = document.createElement('span');

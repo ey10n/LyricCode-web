@@ -3,16 +3,19 @@
 (function (LC) {
   'use strict';
 
-  const { Editor, Text, UI, PdfImport, Sheet, Cloud } = LC;
+  const { Editor, Text, UI, PdfImport, Sheet, Cloud, Library } = LC;
 
   /** 画面に出す版の番号。公開し直すときは sw.js の CACHE と同じ番号に上げる */
-  const APP_VERSION = 'v2';
+  const APP_VERSION = 'v3';
 
   const MODE_NAMES = { lyric: '歌詞編集', chord: 'コード編集', both: '歌詞＋コード編集', view: '閲覧' };
   const MODE_KEYS = ['lyric', 'chord', 'both', 'view'];
+  /** 曲の一覧を持つ前の版の、書きかけの 1 曲（初めて開いたときに曲の一覧へ移す） */
   const DRAFT_KEY = 'lyriccode.draft';
   const SETTINGS_KEY = 'lyriccode.settings';
   const FILE_TYPES = [{ description: 'LyricCode ファイル', accept: { 'text/plain': ['.lct', '.txt'] } }];
+  /** iPad のアプリ版の「Web 版へ書き出す」で作るファイルの形式 */
+  const BUNDLE_FORMAT = 'lyriccode-library';
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS/.test(navigator.userAgent);
   const CTRL = isMac ? '⌘' : 'Ctrl+';
 
@@ -23,15 +26,24 @@
   const pdfInput = document.getElementById('pdfInput');
   const freeTextBtn = document.getElementById('freeTextBtn');
 
-  let fileName = '';       // 表示用のファイル名（未保存なら空）
-  let fileHandle = null;   // 上書き保存に使うファイル（対応ブラウザのみ）
-  let suggestName = '';    // 保存時のファイル名の候補（PDF から取り込んだときなど）
+  const library = new Library();
+  const importInput = document.getElementById('importInput');
+  let currentId = '';      // 開いている曲
+  let fileHandle = null;   // 上書き保存に使うファイル（対応ブラウザのみ。開いている曲をファイルにも書くとき）
+
+  function currentSong() {
+    return library.get(currentId);
+  }
+
+  function songName() {
+    const s = currentSong();
+    return s ? s.name : '無題';
+  }
 
   // ---- 表示の更新 ----
 
   function updateCaption() {
-    let s = fileName || '無題';
-    if (editor.modified) s += ' *';
+    const s = songName();
     titleEl.textContent = s;
     document.title = s + ' - LyricCode';
   }
@@ -56,12 +68,13 @@
     draftTimer = setTimeout(saveDraft, 800);
   }
 
+  // 開いている曲の中身を曲の一覧に書き戻す（中身が変わっていなければ何もしない）
   function saveDraft() {
-    try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({
-        text: editor.getSheetText(true), fileName, suggestName, modified: editor.modified,
-      }));
-    } catch (e) { /* 保存できなくても動作は続ける */ }
+    clearTimeout(draftTimer);
+    if (!currentSong()) return;
+    library.saveOk = true;
+    library.update(currentId, { text: editor.getSheetText(true), style: editor.getStyle() });
+    if (!library.saveOk) statusEl.textContent = 'ブラウザの保存領域がいっぱいで、保存できませんでした';
   }
 
   function saveSettings() {
@@ -80,14 +93,42 @@
         editor.freeText = !!st.freeText;
         if (st.fontSize) editor.fontSize = st.fontSize;
       }
-      const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
-      if (d && typeof d.text === 'string') {
-        editor.setSheetText(d.text);
-        fileName = d.fileName || '';
-        suggestName = d.suggestName || '';
-        editor.setModified(!!d.modified);
-      }
     } catch (e) { /* 無視 */ }
+    // 前の版の書きかけの 1 曲を、曲の一覧の最初の曲にする
+    if (!library.list().length) {
+      let d = null;
+      try { d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { /* 無視 */ }
+      if (d && typeof d.text === 'string' && Sheet.getSheetText(Sheet.parseSheetText(d.text), false).trim() !== '') {
+        library.add(baseName(d.fileName || d.suggestName) || '無題', d.text, {});
+      }
+    }
+    const first = library.get(library.currentId) || library.list()[0];
+    if (first) openSong(first.id);
+    else newSong('無題');
+  }
+
+  /** 曲を開く（今の曲は保存してから） */
+  function openSong(id) {
+    if (currentId && id !== currentId) saveDraft();
+    const s = library.get(id);
+    if (!s) return;
+    currentId = id;
+    library.currentId = id;
+    fileHandle = null;
+    editor.setSheetText(s.text, s.style);
+    // 開いただけで「変わった」ことにならないよう、読み直した形をそのまま覚えておく（更新日時は変えない）
+    s.text = editor.getSheetText(true);
+    s.style = editor.getStyle();
+    library.save();
+    editor.setModified(false);
+    updateCaption();
+    updateStatus();
+  }
+
+  function newSong(name, text, style) {
+    const s = library.add(name, text || '', style || {});
+    openSong(s.id);
+    return s;
   }
 
   editor.onChange = () => {
@@ -118,48 +159,33 @@
     }
   }
 
-  // 同期する内容：作業中のコード譜（保存形式のテキスト）と、表示用のファイル名
+  // 同期する内容：曲の一覧の全曲（曲ごとに新しい方を残す）。
+  // doc は曲の一覧を持たない前の版（v2）の端末向けに、開いている曲を入れておく
   function snapshot() {
-    return { doc: { text: editor.getSheetText(true), fileName, suggestName } };
-  }
-
-  function applyRemote(remote) {
-    const d = remote.doc || {};
-    editor.setSheetText(d.text || '');
-    fileName = d.fileName || '';
-    suggestName = d.suggestName || '';
-    fileHandle = null;
-    // この端末にはまだ保存していない内容なので、変更ありとして扱う
-    editor.setModified(Sheet.getSheetText(editor.lines, false).trim() !== '');
-    updateCaption();
     saveDraft();
+    return { library: library.snapshot(), doc: { text: editor.getSheetText(true), fileName: songName() + '.lct' } };
   }
 
-  function isEmptyDoc() {
-    return editor.lines.every((l) => l.text === '' && l.chords.length === 0);
-  }
-
-  function previewOf(doc) {
-    if (!doc || !doc.text) return '（空）';
-    const lines = Sheet.getSheetText(Sheet.parseSheetText(doc.text), false, '\n').split('\n');
-    const head = lines.slice(0, 12).join('\n').trimEnd();
-    return (doc.fileName ? '［' + doc.fileName + '］\n' : '') + (head || '（空）') + (lines.length > 13 ? '\n…' : '');
-  }
-
-  /** 競合したとき、どちらを残すかを選んでもらう */
-  function resolveConflict(remote, local) {
-    const when = remote.updatedAt ? new Date(remote.updatedAt).toLocaleString('ja-JP') : '';
-    return UI.custom('他の端末でも編集されています', (body, buttons, finish) => {
-      body.innerHTML = '<p class="dlg-message">この端末と他の端末の両方で、前回の同期のあとに編集されました。' +
-        'どちらの内容を残しますか？</p><div class="conflict"><div><b>他の端末</b> <span class="info"></span>' +
-        '<pre class="remote"></pre></div><div><b>この端末</b><pre class="local"></pre></div></div>';
-      body.querySelector('.info').textContent = `（${remote.device || '不明'}・${when}）`;
-      body.querySelector('.remote').textContent = previewOf(remote.doc);
-      body.querySelector('.local').textContent = previewOf(local.doc);
-      UI.addButton(buttons, 'あとで', false, () => finish(null));
-      UI.addButton(buttons, 'この端末の内容を残す', false, () => finish('local'));
-      UI.addButton(buttons, '他の端末の内容を読み込む', true, () => finish('remote'));
-    }, null, true);
+  /** 他の端末の曲の一覧を合わせる。開いている曲が他の端末で変わっていたら読み直す */
+  function mergeRemote(remote) {
+    if (!remote.library) return;
+    saveDraft();
+    const changed = library.mergeFrom(remote.library);
+    if (changed.includes(currentId)) {
+      const s = library.get(currentId);
+      if (s) {
+        editor.setSheetText(s.text, s.style);
+        editor.setModified(false);
+        statusEl.textContent = '他の端末で変更された「' + s.name + '」を読み込みました';
+      } else {
+        const next = library.list()[0];
+        currentId = '';
+        if (next) openSong(next.id); else newSong('無題');
+        statusEl.textContent = '開いていた曲は、他の端末で削除されました';
+      }
+    }
+    updateCaption();
+    if (songListRefresh) songListRefresh();
   }
 
   async function startSync(token) {
@@ -177,7 +203,7 @@
     const sharedToken = cloud.enabled ? '' : Cloud.lyrickerToken();
     const action = await UI.custom('他の端末との同期', (body, buttons, finish) => {
       body.innerHTML =
-        '<p class="dlg-message">作業中のコード譜を GitHub の非公開の Gist に置いて、どの端末からでも続きを編集できるようにします。' +
+        '<p class="dlg-message">曲の一覧の全曲を GitHub の非公開の Gist に置いて、どの端末からでも続きを編集できるようにします。' +
         'PC で途中まで書いて、iPad で続きを書く、といった使い方ができます。</p>' +
         '<p class="sync-state"></p>' +
         '<div class="token-area">' +
@@ -236,10 +262,9 @@
   function initCloud() {
     cloud = new Cloud.GistSync({
       snapshot,
-      apply: applyRemote,
-      isEmpty: isEmptyDoc,
+      merge: mergeRemote,
+      compareKey: (data) => JSON.stringify(data.library || null),
       status: setSyncStatus,
-      resolve: resolveConflict,
     });
     syncBtn.addEventListener('click', openSyncDialog);
     document.addEventListener('visibilitychange', () => {
@@ -253,29 +278,38 @@
 
   // ---- ファイル ----
 
-  async function confirmSave() {
-    if (!editor.modified) return true;
-    const r = await UI.choose('LyricCode', '変更内容を保存しますか？', [
-      { key: 'cancel', label: 'キャンセル' },
-      { key: 'no', label: '保存しない' },
-      { key: 'yes', label: '保存する', primary: true }]);
-    if (r === 'yes') return save(false);
-    return r === 'no';
-  }
-
   function baseName(name) {
     return (name || '').replace(/\.[^.]*$/, '');
   }
 
+  function isEmptyDoc() {
+    return editor.lines.every((l) => l.text === '' && l.chords.length === 0);
+  }
+
+  /** ファイルを曲として曲の一覧に加えて開く（同じ名前の曲があれば、置き換えるか別の曲にするか尋ねる） */
   async function loadFile(file, handle) {
     try {
       const text = Text.decodeFile(await file.arrayBuffer());
-      editor.setSheetText(text);
-      fileName = file.name;
+      const name = baseName(file.name) || '無題';
+      const same = library.findByName(name);
+      if (same) {
+        const r = await UI.choose('ファイルを開く', `「${name}」という曲がすでにあります。どうしますか？`, [
+          { key: 'cancel', label: 'キャンセル' },
+          { key: 'add', label: '別の曲として加える' },
+          { key: 'replace', label: '今ある曲と置き換える', primary: true }]);
+        if (r === 'cancel' || r === null) { editor.focusEditor(); return; }
+        if (r === 'replace') {
+          saveDraft();
+          library.update(same.id, { text, style: {} });
+          currentId = '';
+          openSong(same.id);
+          fileHandle = handle || null;
+          editor.focusEditor();
+          return;
+        }
+      }
+      newSong(name, text, {});
       fileHandle = handle || null;
-      suggestName = '';
-      updateCaption();
-      saveDraft();
     } catch (e) {
       await UI.message('開けませんでした', String(e.message || e));
     }
@@ -283,7 +317,6 @@
   }
 
   async function openFile() {
-    if (!(await confirmSave())) return;
     if (window.showOpenFilePicker) {
       try {
         const [h] = await window.showOpenFilePicker({ types: FILE_TYPES, multiple: false });
@@ -307,61 +340,54 @@
     await w.close();
   }
 
-  // 保存形式は Windows 版と同じ（UTF-8・改行 CRLF・先頭行 #LyricCode 1）
+  // 開いている曲をファイルにも書く（曲そのものは曲の一覧に自動で保存されている）。
+  // 保存形式は Windows 版と同じ（UTF-8・改行 CRLF・先頭行 #LyricCode 1）。点滅・色・太字は入らない
   async function save(saveAs) {
+    saveDraft();
     const bytes = Text.encodeFile(editor.getSheetText(true));
     try {
       if (!saveAs && fileHandle && fileHandle.createWritable) {
         await writeHandle(fileHandle, bytes);
       } else if (window.showSaveFilePicker) {
-        const h = await window.showSaveFilePicker({
-          suggestedName: (baseName(fileName || suggestName) || '無題') + '.lct', types: FILE_TYPES,
-        });
+        const h = await window.showSaveFilePicker({ suggestedName: songName() + '.lct', types: FILE_TYPES });
         await writeHandle(h, bytes);
         fileHandle = h;
-        fileName = h.name;
       } else {
         // ファイルを直接書けないブラウザ（Safari など）はダウンロードとして保存する
-        let name = await UI.prompt('名前を付けて保存', 'ファイル名', baseName(fileName || suggestName) || '無題');
+        let name = await UI.prompt('ファイルに保存', 'ファイル名', songName());
         if (name === null) { editor.focusEditor(); return false; }
         name = name.trim() || '無題';
         if (!/\.(lct|txt)$/i.test(name)) name += '.lct';
-        const blob = new Blob([bytes], { type: 'text/plain' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-        fileName = name;
+        downloadBlob(new Blob([bytes], { type: 'text/plain' }), name);
       }
     } catch (e) {
       if (e.name !== 'AbortError') await UI.message('保存できませんでした', String(e.message || e));
       editor.focusEditor();
       return false;
     }
-    suggestName = '';
-    editor.setModified(false);
-    updateCaption();
-    saveDraft();
+    statusEl.textContent = 'ファイルに保存しました';
     editor.focusEditor();
     return true;
   }
 
+  function downloadBlob(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+
   async function newDocument() {
-    if (!(await confirmSave())) return;
-    editor.newDocument();
-    fileName = '';
-    fileHandle = null;
-    suggestName = '';
-    updateCaption();
-    saveDraft();
+    const name = await UI.prompt('新しい曲', '曲名', '');
+    if (name === null) { editor.focusEditor(); return; }
+    newSong(name.trim() || '無題');
     editor.focusEditor();
   }
 
   async function importPdf() {
-    if (!(await confirmSave())) return;
     pdfInput.value = '';
     pdfInput.click();
   }
@@ -375,21 +401,191 @@
       if (!lines.length) {
         await UI.message('PDF の読み込み', 'PDF から文字を取り出せませんでした。\nスキャンした画像の PDF には文字の情報が含まれていません。');
       } else {
-        editor.assignLines(lines);
-        // 取り込んだ内容は未保存の新しい文書として扱う
-        fileName = '';
-        fileHandle = null;
-        suggestName = baseName(f.name) + '.lct';
-        editor.setModified(true);
-        updateCaption();
-        saveDraft();
+        // 取り込んだ内容は新しい曲として曲の一覧に加える
+        newSong(baseName(f.name), Sheet.getSheetText(lines, true), {});
+        statusEl.textContent = 'PDF を新しい曲として取り込みました';
       }
     } catch (e) {
       await UI.message('PDF を読み込めませんでした', String(e.message || e));
     }
-    updateStatus();
     editor.focusEditor();
   });
+
+  // ---- 曲の一覧 ----
+
+  let songListRefresh = null;
+
+  async function openSongList() {
+    saveDraft();
+    const action = await UI.custom('曲の一覧', (body, buttons, finish) => {
+      body.innerHTML = '<input type="search" class="song-search" placeholder="曲名で探す" autocomplete="off">' +
+        '<p class="song-count"></p><ul class="song-list" role="listbox"></ul>';
+      const search = body.querySelector('.song-search');
+      const ul = body.querySelector('.song-list');
+      const count = body.querySelector('.song-count');
+      const render = () => {
+        const q = search.value.trim().normalize('NFC').toLowerCase();
+        const all = library.list();
+        const songs = q ? all.filter((x) => x.name.normalize('NFC').toLowerCase().includes(q)) : all;
+        count.textContent = q ? `${songs.length} / ${all.length} 曲` : `${all.length} 曲`;
+        ul.textContent = '';
+        for (const song of songs) {
+          const li = document.createElement('li');
+          li.className = 'song' + (song.id === currentId ? ' current' : '');
+          const open = document.createElement('button');
+          open.type = 'button';
+          open.className = 'song-open';
+          open.textContent = song.name;
+          open.addEventListener('click', () => finish({ open: song.id }));
+          const ren = document.createElement('button');
+          ren.type = 'button';
+          ren.className = 'song-tool';
+          ren.textContent = '名前';
+          ren.title = '名前を変える';
+          ren.addEventListener('click', () => finish({ rename: song.id }));
+          const del = document.createElement('button');
+          del.type = 'button';
+          del.className = 'song-tool danger';
+          del.textContent = '削除';
+          del.addEventListener('click', () => finish({ remove: song.id }));
+          li.append(open, ren, del);
+          ul.appendChild(li);
+        }
+      };
+      search.addEventListener('input', render);
+      render();
+      songListRefresh = render;
+      const imp = UI.addButton(buttons, '取り込む...', false, () => finish({ import: true }));
+      imp.classList.add('left');
+      UI.addButton(buttons, '閉じる', false, () => finish(null));
+      UI.addButton(buttons, '新しい曲', true, () => finish({ create: true }));
+      const cur = ul.querySelector('.current');
+      if (cur) setTimeout(() => cur.scrollIntoView({ block: 'center' }), 0);
+    }, null, true);
+    songListRefresh = null;
+    if (!action) { editor.focusEditor(); return; }
+    if (action.open) {
+      openSong(action.open);
+    } else if (action.create) {
+      await newDocument();
+      return;
+    } else if (action.import) {
+      importInput.value = '';
+      importInput.click();
+      return;
+    } else if (action.rename) {
+      const song = library.get(action.rename);
+      const name = song && await UI.prompt('名前を変える', '曲名', song.name);
+      if (name && name.trim()) {
+        library.rename(song.id, name.trim());
+        updateCaption();
+      }
+      return openSongList();
+    } else if (action.remove) {
+      const song = library.get(action.remove);
+      if (song && await UI.confirm('曲を削除', `「${song.name}」を削除しますか？\n（同期している他の端末からも消えます）`)) {
+        library.remove(song.id);
+        if (song.id === currentId) {
+          currentId = '';
+          const next = library.list()[0];
+          if (next) openSong(next.id); else newSong('無題');
+        }
+        if (cloud) cloud.schedule();
+      }
+      return openSongList();
+    }
+    editor.focusEditor();
+  }
+
+  // 取り込み：アプリ版の「Web 版へ書き出す」のファイル（.json）と、.lct・.txt（いくつでも選べる）
+  importInput.addEventListener('change', async () => {
+    const files = [...importInput.files];
+    if (!files.length) return;
+    const entries = [];
+    let playlists = null;
+    try {
+      for (const f of files) {
+        if (/\.json$/i.test(f.name)) {
+          const data = JSON.parse(await f.text());
+          if (!data || data.format !== BUNDLE_FORMAT || !Array.isArray(data.songs)) {
+            throw new Error(`「${f.name}」は LyricCode の書き出しのファイルではありません。`);
+          }
+          for (const x of data.songs) {
+            if (x && typeof x.text === 'string') {
+              entries.push({
+                name: String(x.name || '無題').normalize('NFC'), text: x.text,
+                style: { blinking: x.blinking || [], chordColors: x.chordColors || [], boldLyrics: x.boldLyrics || [] },
+              });
+            }
+          }
+          if (Array.isArray(data.playlists)) playlists = data.playlists;
+        } else {
+          entries.push({ name: (baseName(f.name) || '無題').normalize('NFC'), text: Text.decodeFile(await f.arrayBuffer()), style: {} });
+        }
+      }
+    } catch (e) {
+      await UI.message('取り込めませんでした', String(e.message || e));
+      editor.focusEditor();
+      return;
+    }
+    if (!entries.length) {
+      await UI.message('取り込み', '取り込める曲がありませんでした。');
+      editor.focusEditor();
+      return;
+    }
+    await importEntries(entries, playlists);
+  });
+
+  async function importEntries(entries, playlists) {
+    saveDraft();
+    const dup = entries.filter((e) => library.findByName(e.name));
+    let how = 'add';
+    if (dup.length) {
+      const r = await UI.choose('取り込み',
+        `取り込む ${entries.length} 曲のうち ${dup.length} 曲は、同じ名前の曲がすでにあります。どうしますか？`, [
+          { key: 'cancel', label: 'キャンセル' },
+          { key: 'skip', label: '同じ名前の曲は飛ばす' },
+          { key: 'add', label: '別の曲として加える' },
+          { key: 'replace', label: '今ある曲と置き換える', primary: true }]);
+      if (r === 'cancel' || r === null) { editor.focusEditor(); return; }
+      how = r;
+    }
+    let added = 0, replaced = 0, firstId = '';
+    for (const e of entries) {
+      // 飾りは一度読み込んで、行やコードの位置に合うものだけを残す（エディタで開いたときと同じ形にする）
+      const lines = Sheet.parseSheetText(e.text);
+      Sheet.applyStyle(lines, e.style);
+      const text = Sheet.getSheetText(lines, true), style = Sheet.getStyle(lines);
+      const same = library.findByName(e.name);
+      if (same && how === 'skip') continue;
+      if (same && how === 'replace') {
+        library.update(same.id, { text, style });
+        replaced++;
+        firstId = firstId || same.id;
+      } else {
+        const s = library.add(e.name, text, style);
+        added++;
+        firstId = firstId || s.id;
+      }
+    }
+    if (playlists) {
+      library.playlists = playlists;
+      library.save();
+    }
+    // 初めに自動でできた空の「無題」は、取り込んだら消す
+    const blank = currentSong();
+    if (firstId && blank && blank.id !== firstId && /^無題( \d+)?$/.test(blank.name) && isEmptyDoc()) {
+      library.remove(blank.id);
+      currentId = '';
+    }
+    if (firstId) {
+      if (firstId === currentId) currentId = '';
+      openSong(firstId);
+    }
+    if (cloud) cloud.schedule();
+    await UI.message('取り込み', `${added} 曲を加え、${replaced} 曲を置き換えました。\n曲名をタップすると曲の一覧が開きます。`);
+    editor.focusEditor();
+  }
 
   // ---- 編集 ----
 
@@ -412,19 +608,23 @@
         const r = await UI.choose('コード譜の貼り付け', '貼り付ける文字はコード譜のようです。どのように貼り付けますか？', [
           { key: 'cancel', label: 'キャンセル' },
           { key: 'lyric', label: '歌詞として挿入' },
-          { key: 'sheet', label: 'コード譜として読み込む（今の内容と置き換え）', primary: true }]);
-        if (r === 'cancel') { editor.focusEditor(); return; }
+          { key: 'new', label: '新しい曲として加える' },
+          { key: 'sheet', label: '今の曲と置き換える', primary: true }]);
+        if (r === 'cancel' || r === null) { editor.focusEditor(); return; }
+        if (r === 'new') {
+          const name = await UI.prompt('新しい曲', '曲名', '');
+          if (name !== null) {
+            newSong(name.trim() || '無題', text, {});
+            statusEl.textContent = 'コード譜を新しい曲として加えました';
+          }
+          editor.focusEditor();
+          return;
+        }
         load = r === 'sheet';
-        if (load && editor.modified && !(await confirmSave())) { editor.focusEditor(); return; }
       }
       if (load) {
-        editor.setSheetText(text);
-        fileName = '';
-        fileHandle = null;
-        suggestName = '';
-        editor.setModified(true);
-        updateCaption();
-        saveDraft();
+        // 「元に戻す」で戻せるよう、今の曲の中身として読み込む
+        editor.replaceAll(text);
         statusEl.textContent = 'コード譜を読み込みました';
         editor.focusEditor();
         return;
@@ -491,6 +691,16 @@
     editor.focusEditor();
   }
 
+  // 歌詞の太字（カーソルのある行をまるごと切り替える）
+  function toggleBold() {
+    if (editor.mode !== 'lyric' && editor.mode !== 'both') {
+      statusEl.textContent = '太字は、歌詞編集か歌詞＋コード編集で、太字にしたい行にカーソルを置いてから押してください';
+    } else if (!editor.toggleBoldLine()) {
+      statusEl.textContent = '歌詞のない行は太字にできません';
+    }
+    editor.focusEditor();
+  }
+
   function zoom(d) {
     editor.fontSize = d === 0 ? LC.DEFAULT_FONT_SIZE : editor.fontSize + d * 2;
     saveSettings();
@@ -512,6 +722,7 @@
         ['|', '小節線（空いている位置に入力）'],
         ['右クリック・長押し', '空いた位置では基音・小節線・音符を選択、コードの上では種類（m, 7, m7, maj7, dim など）を選択'],
         ['Enter・ダブルクリック', 'コード名を直接入力'],
+        ['右クリック・長押し（コードの上）', '点滅させる・色を付ける（この行のコードすべてにもできます）'],
         ['Delete / BackSpace', '削除 / 末尾を 1 文字削除'],
         ['ドラッグ・Shift+矢印', 'コードを移動（矢印だけなら入力位置を移動）'],
         ['', '歌詞のない所や最終行より下にも入力できます（行は自動で追加）'],
@@ -521,8 +732,9 @@
       '<p>コード行に、打った文字（サビ、×2、rit. など）をそのまま置きます。空白で次の位置へ進みます。</p>' +
       '<h3>ショートカット</h3>' +
       t([
-        [CTRL + 'O / ' + CTRL + 'S', '開く / 上書き保存（' + CTRL + 'Shift+S で名前を付けて保存）'],
-        ['Alt+N', '新規'],
+        ['Alt+L / Alt+N', '曲の一覧 / 新しい曲'],
+        [CTRL + 'O / ' + CTRL + 'S', 'ファイルを開く / ファイルに上書き保存（' + CTRL + 'Shift+S で名前を付けて保存）'],
+        [CTRL + 'B', '歌詞の太字（カーソルの行をまるごと切り替え）'],
         [CTRL + 'I', 'PDF のコード譜を読み込む'],
         [CTRL + 'Z / ' + CTRL + 'Y', '元に戻す / やり直し'],
         [CTRL + 'V', '歌詞を貼り付け'],
@@ -530,18 +742,22 @@
         [CTRL + 'Shift+↑↓', '全体を移調'],
         [CTRL + '+ / ' + CTRL + '- / ' + CTRL + '0', '拡大 / 縮小 / 標準サイズ（' + CTRL + 'ホイールでも拡大縮小）'],
       ]) +
+      '<h3>曲の一覧（「☰ 曲の一覧」・右上の曲名）</h3>' +
+      '<p>曲はすべてブラウザの中に自動で保存されます（保存の操作は要りません）。一覧から曲を開く・新しい曲を作る・名前を変える・削除するができます。' +
+      'コードの点滅・色と歌詞の太字も曲と一緒に保存されます（.lct には入らないので、Windows 版やファイルに保存したときには付きません）。</p>' +
+      '<h3>iPad のアプリ版からの引っ越し</h3>' +
+      '<p>アプリ版の「…」→「Web 版へ書き出す」で、全曲（点滅・色・太字も）が「ファイル」の「この iPad 内 › LyricCode › Web版へ」に書き出されます。' +
+      'ここで「曲の一覧」→「取り込む...」を押してそのファイル（LyricCode 全曲.json）を選ぶと、全曲が曲の一覧に入ります。' +
+      '.lct・.txt のファイルも、いくつでもまとめて選んで取り込めます。</p>' +
       '<h3>ファイル</h3>' +
-      '<p>保存形式（.lct）は Windows 版の LyricCode と同じです。Safari など、ファイルを直接上書きできないブラウザでは、保存するとダウンロードになります。' +
-      '書きかけの内容はブラウザに自動で保存され、次に開いたときに続きから書けます。</p>' +
-      '<h3>iPad のアプリ版・他のアプリからの取り込み</h3>' +
-      '<p>アプリ版の「編集」→「全体をテキストとしてコピー」でコピーし、ここで「貼り付け」（' + CTRL + 'V）を押すと、' +
-      'コードの位置を保ったままコード譜として読み込みます。コード行に日本語（自由文字）がある場合は、' +
-      'アプリ版で .lct を「ファイル」アプリに保存し、「ファイル」→「開く」で読み込むと確実です。</p>' +
+      '<p>保存形式（.lct）は Windows 版の LyricCode と同じです。「ファイルを開く」で開いたファイルは曲の一覧に加わります。' +
+      '「ファイルに保存」は開いている曲を .lct として書き出します（Safari など、ファイルを直接上書きできないブラウザではダウンロードになります）。' +
+      'コード譜の文字を貼り付けると、歌詞として入れるか、新しい曲にするか、今の曲と置き換えるかを選べます。</p>' +
       '<h3>他の端末との同期（右上の ☁）</h3>' +
-      '<p>GitHub の非公開の Gist を使って、作業中のコード譜を端末どうしで同期します。PC で途中まで書いて、iPad で続きを書けます。' +
+      '<p>GitHub の非公開の Gist を使って、曲の一覧の全曲を端末どうしで同期します。PC で途中まで書いて、iPad で続きを書けます。' +
       '「gist」の権限だけの GitHub のトークンを、同期したい端末ごとに一度登録してください（Lyricker と同じトークンで構いません）。' +
       '編集すると数秒後に自動で送られ、画面を開いたとき・戻ったとき・1 分ごとに他の端末の変更を読み込みます。' +
-      '両方の端末で同時に編集した場合は、どちらを残すか選ぶ画面が出ます。</p>' +
+      '曲ごとに、あとから編集した方が残ります（同じ曲を両方の端末で同時に編集すると、先に編集した方の変更は消えます）。</p>' +
       `<p class="version-line">LyricCode Web 版 ${APP_VERSION}</p>` +
       '</div>');
   }
@@ -550,6 +766,7 @@
 
   const commands = {
     new: newDocument,
+    songs: openSongList,
     open: openFile,
     save: () => save(false),
     saveAs: () => save(true),
@@ -563,6 +780,7 @@
     transposeUp: () => { editor.transposeAll(1); editor.focusEditor(); },
     transposeDown: () => { editor.transposeAll(-1); editor.focusEditor(); },
     freeText: toggleFreeText,
+    bold: toggleBold,
     zoomIn: () => zoom(1),
     zoomOut: () => zoom(-1),
     zoomReset: () => zoom(0),
@@ -576,10 +794,12 @@
 
   const MENUS = {
     file: () => [
-      { label: '新規', shortcut: 'Alt+N', cmd: 'new' },
-      { label: '開く...', shortcut: CTRL + 'O', cmd: 'open' },
-      { label: '上書き保存', shortcut: CTRL + 'S', cmd: 'save' },
-      { label: '名前を付けて保存...', shortcut: CTRL + 'Shift+S', cmd: 'saveAs' },
+      { label: '曲の一覧...', shortcut: 'Alt+L', cmd: 'songs' },
+      { label: '新しい曲...', shortcut: 'Alt+N', cmd: 'new' },
+      '-',
+      { label: 'ファイルを開く...', shortcut: CTRL + 'O', cmd: 'open' },
+      { label: 'ファイルに上書き保存', shortcut: CTRL + 'S', cmd: 'save' },
+      { label: 'ファイルに保存...', shortcut: CTRL + 'Shift+S', cmd: 'saveAs' },
       '-',
       { label: 'PDF を読み込む...', shortcut: CTRL + 'I', cmd: 'importPdf' },
       '-',
@@ -597,6 +817,7 @@
       { label: '移調 －半音', shortcut: CTRL + 'Shift+↓', cmd: 'transposeDown' },
       '-',
       { label: '自由文字入力', shortcut: CTRL + 'Shift+F', cmd: 'freeText', checked: editor.freeText },
+      { label: '歌詞の太字（カーソルの行）', shortcut: CTRL + 'B', cmd: 'bold' },
     ],
     mode: () => MODE_KEYS.map((m, i) => ({
       label: MODE_NAMES[m], shortcut: 'Alt+' + (i + 1), checked: editor.mode === m, onClick: () => setMode(m),
@@ -624,6 +845,8 @@
   document.querySelectorAll('.toolbar [data-cmd]').forEach((b) => b.addEventListener('click', () => run(b.dataset.cmd)));
   document.querySelectorAll('.toolbar .mode').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
   freeTextBtn.addEventListener('click', toggleFreeText);
+  // 曲名をタップすると曲の一覧を開く
+  titleEl.addEventListener('click', openSongList);
   // ツールバーのボタンを押しても、エディタの入力欄からフォーカスを外さない
   document.querySelector('.toolbar').addEventListener('pointerdown', (e) => {
     if (e.target.closest('button')) e.preventDefault();
@@ -645,6 +868,7 @@
       else if (k === 'y' || (k === 'z' && e.shiftKey)) cmd = 'redo';
       else if (k === 'e' && e.shiftKey) cmd = 'copyAll';
       else if (k === 'f' && e.shiftKey) cmd = 'freeText';
+      else if (k === 'b' && !e.shiftKey) cmd = 'bold';
       else if (k === 'ArrowUp' && e.shiftKey) cmd = 'transposeUp';
       else if (k === 'ArrowDown' && e.shiftKey) cmd = 'transposeDown';
       else if (k === '=' || k === '+' || k === ';' || e.code === 'NumpadAdd') cmd = 'zoomIn';
@@ -654,6 +878,7 @@
       const m = /^Digit([1-4])$/.exec(e.code);
       if (m) { setMode(MODE_KEYS[Number(m[1]) - 1]); e.preventDefault(); return; }
       if (e.code === 'KeyN') cmd = 'new';
+      else if (e.code === 'KeyL') cmd = 'songs';
     } else if (e.key === 'F1') {
       cmd = 'help';
     }
@@ -664,13 +889,8 @@
     }
   }, true);
 
-  window.addEventListener('beforeunload', (e) => {
-    saveDraft();
-    if (editor.modified) {
-      e.preventDefault();
-      e.returnValue = '';
-    }
-  });
+  // 曲は曲の一覧に自動で保存しているので、閉じるときに尋ねない
+  window.addEventListener('beforeunload', saveDraft);
 
   // ---- 起動 ----
 

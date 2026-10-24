@@ -33,6 +33,25 @@
     caret: '#000000',
   };
 
+  /** コードの色（iPad のアプリ版と同じ名前と色。白地で読める濃さ）。標準（色なし）は COLOR.chord */
+  const CHORD_COLORS = [
+    { key: 'red', label: '赤', css: '#D70015' },
+    { key: 'blue', label: '青', css: '#0040DD' },
+    { key: 'green', label: '緑', css: '#1E8A3A' },
+    { key: 'purple', label: '紫', css: '#8E24AA' },
+    { key: 'orange', label: '橙', css: '#D45500' },
+    { key: 'yellow', label: '黄', css: '#B88A00' },
+  ];
+
+  function chordColorCss(key) {
+    const c = key && CHORD_COLORS.find((o) => o.key === key);
+    return c ? c.css : COLOR.chord;
+  }
+
+  /** コードの点滅の速さ（iPad のアプリ版と同じ。1 秒のうち 0.7 秒点いて 0.3 秒消える） */
+  const BLINK_PERIOD_MS = 1000;
+  const BLINK_ON_RATIO = 0.7;
+
   const LYRIC_FONT = '"MS Gothic","ＭＳ ゴシック","Osaka-Mono","Hiragino Sans","Hiragino Kaku Gothic ProN",' +
     '"Noto Sans JP","Yu Gothic",monospace';
   const CHORD_FONT = 'Arial,Helvetica,"Hiragino Sans","Yu Gothic",sans-serif';
@@ -51,6 +70,13 @@
       case 'Space': return ' ';
       default: return '';
     }
+  }
+
+  // 位置 at 以降の番号を n だけ後ろへずらす（歌詞に文字を入れたときの太字の位置）
+  function shiftSet(set, at, n) {
+    const r = new Set();
+    for (const k of set) r.add(k >= at ? k + n : k);
+    return r;
   }
 
   // 全角英数字を半角に
@@ -124,6 +150,15 @@
       setInterval(() => {
         if (this.focused && this.lyricCaretActive()) { this.caretOn = !this.caretOn; this.invalidate(); }
       }, 530);
+      // 点滅させるコードがあるときだけ、点く・消えるの変わり目で描き直す
+      this.blinkOn = true;
+      setInterval(() => {
+        const on = (Date.now() % BLINK_PERIOD_MS) < BLINK_PERIOD_MS * BLINK_ON_RATIO;
+        if (on !== this.blinkOn) {
+          this.blinkOn = on;
+          if (this.lines.some((l) => l.chords.some((c) => c.blink))) this.invalidate();
+        }
+      }, 50);
       this.resize();
     }
 
@@ -180,6 +215,7 @@
       this.lyricPx = lyricPx;
       this.chordPx = chordPx;
       this.lyricFont = `${lyricPx}px ${LYRIC_FONT}`;
+      this.lyricBoldFont = `bold ${lyricPx}px ${LYRIC_FONT}`;
       this.chordFont = `bold ${chordPx}px ${CHORD_FONT}`;
       this.gutterFont = `${gutterPx}px ${GUTTER_FONT}`;
       const ctx = this.ctx;
@@ -386,13 +422,16 @@
     getState() {
       return JSON.stringify({
         cl: this.caretLine, ci: this.caretIdx,
-        lines: this.lines.map((l) => [l.text, l.chords.map((c) => [c.col, c.name])]),
+        lines: this.lines.map((l) => [l.text, l.chords.map((c) => [c.col, c.name, c.blink ? 1 : 0, c.color || '']),
+          [...l.bold]]),
       });
     }
 
     setState(s) {
       const st = JSON.parse(s);
-      this.lines = st.lines.map(([t, cs]) => new SheetLine(t, cs.map(([col, name]) => ({ col, name }))));
+      this.lines = st.lines.map(([t, cs, bold]) => new SheetLine(t,
+        cs.map(([col, name, blink, color]) => Sheet.copyChord({ col, name, blink: !!blink, color: color || '' })),
+        new Set(bold || [])));
       this.caretLine = st.cl;
       this.caretIdx = st.ci;
       this.clampPositions();
@@ -483,18 +522,29 @@
         if (!sl) continue;
 
         ctx.font = this.chordFont;
-        ctx.fillStyle = COLOR.chord;
-        for (const c of sl.chords) ctx.fillText(c.name, xo + c.col * this.cellW, y + 1);
+        for (const c of sl.chords) {
+          // 点滅させるコードは消えている間、閲覧では見えなくし、編集中は薄く残す（どこにあるか分かるように）
+          if (c.blink && !this.blinkOn) {
+            if (this._mode === 'view') continue;
+            ctx.globalAlpha = 0.25;
+          }
+          ctx.fillStyle = chordColorCss(c.color);
+          ctx.fillText(c.name, xo + c.col * this.cellW, y + 1);
+          ctx.globalAlpha = 1;
+        }
 
-        ctx.font = this.lyricFont;
         ctx.fillStyle = COLOR.lyric;
         const t = sl.text;
         let x = xo;
         for (let j = 0; j < t.length;) {
           const cells = Text.charCells(t.charCodeAt(j));
+          const bold = sl.bold.has(j);
           let s;
           if (j + 1 < t.length && Text.isLowSur(t.charCodeAt(j + 1))) { s = t.substr(j, 2); j += 2; } else { s = t[j]; j++; }
-          if (s !== ' ' && x + cells * this.cellW > this.gutterW && x < w) ctx.fillText(s, x, y + this.chordH + 3);
+          if (s !== ' ' && x + cells * this.cellW > this.gutterW && x < w) {
+            ctx.font = bold ? this.lyricBoldFont : this.lyricFont;
+            ctx.fillText(s, x, y + this.chordH + 3);
+          }
           x += cells * this.cellW;
         }
 
@@ -920,7 +970,11 @@
       const p = Text.textCells(sl.text, this.caretIdx);
       const w = Text.allCells(u);
       const oldLen = Text.allCells(sl.text);
-      sl.text = sl.text.slice(0, this.caretIdx) + u + sl.text.slice(this.caretIdx);
+      const at = this.caretIdx;
+      const inherit = at > 0 && sl.bold.has(at - 1);
+      sl.text = sl.text.slice(0, at) + u + sl.text.slice(at);
+      sl.bold = shiftSet(sl.bold, at, u.length);
+      if (inherit) for (let k = at; k < at + u.length; k++) sl.bold.add(k);
       // 歌詞の上に乗っているコードは文字と一緒に動かす。行末より右に置いたコードは動かさない
       for (const c of sl.chords) if (c.col >= p && c.col < oldLen) c.col += w;
       sl.normalize();
@@ -933,6 +987,12 @@
       const w = Text.allCells(sl.text.substr(idx, count));
       const oldLen = Text.allCells(sl.text);
       sl.text = sl.text.slice(0, idx) + sl.text.slice(idx + count);
+      const bold = new Set();
+      for (const k of sl.bold) {
+        if (k < idx) bold.add(k);
+        else if (k >= idx + count) bold.add(k - count);
+      }
+      sl.bold = bold;
       for (const c of sl.chords) {
         if (c.col >= p + w && c.col < oldLen) c.col -= w;
         else if (c.col >= p && c.col < p + w) c.col = p;
@@ -946,8 +1006,10 @@
       const oldLen = Text.allCells(sl.text);
       const nl = new SheetLine(sl.text.slice(idx));
       sl.text = sl.text.slice(0, idx);
+      for (const k of sl.bold) if (k >= idx) nl.bold.add(k - idx);
+      sl.bold = new Set([...sl.bold].filter((k) => k < idx));
       sl.chords = sl.chords.filter((c) => {
-        if (c.col >= p && c.col < oldLen) { nl.appendChord(c.col - p, c.name); return false; }
+        if (c.col >= p && c.col < oldLen) { nl.appendChord(c.col - p, c.name, c); return false; }
         return true;
       });
       nl.normalize();
@@ -958,8 +1020,10 @@
       if (l + 1 >= this.lines.length) return;
       const a = this.lines[l], b = this.lines[l + 1];
       const lenA = Text.allCells(a.text);
+      const nA = a.text.length;
       a.text += b.text;
-      for (const c of b.chords) a.appendChord(c.col + lenA, c.name);
+      for (const k of b.bold) a.bold.add(k + nA);
+      for (const c of b.chords) a.appendChord(c.col + lenA, c.name, c);
       a.normalize();
       this.lines.splice(l + 1, 1);
     }
@@ -1142,7 +1206,7 @@
       }
       this.ensureLines(nl);
       this.lines[l].deleteChord(idx);
-      this.lines[nl].addChord(nc, ch.name);
+      this.lines[nl].addChord(nc, ch.name, ch);
       return true;
     }
 
@@ -1254,15 +1318,16 @@
       const words = Text.cleanText(s, false).split(' ');
       this.beginChange(UK_OTHER);
       const idx = this.chordHit(l, c);
-      let col = c;
+      let col = c, attrs = null;
       if (idx >= 0) {
-        col = this.lines[l].chords[idx].col;
+        attrs = this.lines[l].chords[idx];
+        col = attrs.col;
         this.lines[l].deleteChord(idx);
       }
       for (const w of words) {
         if (w === '') { col++; continue; }
         this.ensureLines(l);
-        this.lines[l].addChord(col, w);
+        this.lines[l].addChord(col, w, attrs);
         col += this.chordCells(w) + 1;
       }
       this.changed();
@@ -1413,8 +1478,62 @@
         }, '-');
         items.push({ label: this._freeText ? '文字を直接入力...' : 'コード名を直接入力...', onClick: () => this.editChordDialog(L, C) });
       }
+      if (idx >= 0) this.addStyleMenu(items, L, idx);
       items.push('-', { label: '自由文字入力 (Ctrl+Shift+F)', checked: this._freeText, onClick: () => { this.freeText = !this._freeText; } });
       return items;
+    }
+
+    // コード（小節線・音符・自由文字も）の点滅と色。この行のコードすべてにも当てられる
+    addStyleMenu(items, L, idx) {
+      const c = this.lines[L].chords[idx];
+      const colorItems = (current, apply) => [{ label: '標準', checked: !current, onClick: () => apply('') }, '-']
+        .concat(CHORD_COLORS.map((o) => ({ label: o.label, color: o.css, checked: current === o.key, onClick: () => apply(o.key) })));
+      items.push('-',
+        { label: '点滅させる', checked: !!c.blink, onClick: () => this.setChordStyle(L, [idx], { blink: !c.blink }) },
+        { label: '色', submenu: colorItems(c.color || '', (k) => this.setChordStyle(L, [idx], { color: k })) },
+        {
+          label: 'この行のコードすべて',
+          submenu: [
+            { label: '点滅させる', onClick: () => this.setChordStyle(L, null, { blink: true }) },
+            { label: '点滅をやめる', onClick: () => this.setChordStyle(L, null, { blink: false }) },
+            '-',
+            { label: '色: 標準', onClick: () => this.setChordStyle(L, null, { color: '' }) },
+          ].concat(CHORD_COLORS.map((o) => ({
+            label: '色: ' + o.label, color: o.css, onClick: () => this.setChordStyle(L, null, { color: o.key }),
+          }))),
+        });
+    }
+
+    // 行 l のコード（indices が null なら全部）の点滅・色を変える。style: { blink?: bool, color?: '' | 色の名前 }
+    setChordStyle(l, indices, style) {
+      const line = this.lines[l];
+      if (!line) return;
+      const targets = indices ? indices.map((i) => line.chords[i]).filter(Boolean) : line.chords;
+      const differs = targets.some((c) => ('blink' in style && !!c.blink !== style.blink) ||
+        ('color' in style && (c.color || '') !== style.color));
+      if (!differs) return;
+      this.beginChange(UK_OTHER);
+      for (const c of targets) {
+        if ('blink' in style) { if (style.blink) c.blink = true; else delete c.blink; }
+        if ('color' in style) { if (style.color) c.color = style.color; else delete c.color; }
+      }
+      this.changed();
+    }
+
+    // 歌詞の太字：カーソルのある行をまるごと切り替える（全部太字なら太字をやめる）
+    toggleBoldLine(l = this.caretLine) {
+      const line = this.lines[l];
+      if (!line || line.text.length === 0) return false;
+      const all = [...Array(line.text.length).keys()];
+      const allBold = all.every((k) => line.bold.has(k));
+      this.beginChange(UK_OTHER);
+      line.bold = allBold ? new Set() : new Set(all);
+      this.changed();
+      return true;
+    }
+
+    getStyle() {
+      return Sheet.getStyle(this.lines);
     }
 
     menuQuality(q) {
@@ -1464,8 +1583,18 @@
       return Sheet.getSheetText(this.lines, withHeader);
     }
 
-    setSheetText(s) {
+    // 今の曲の中身をまるごと置き換える（「元に戻す」で戻せる。コード譜の貼り付けで使う）
+    replaceAll(s) {
+      this.beginChange(UK_OTHER);
       this.lines = Sheet.parseSheetText(s);
+      this.clampPositions();
+      this.changed();
+    }
+
+    // style: 曲の一覧に持っている飾り（点滅・コードの色・歌詞の太字）
+    setSheetText(s, style) {
+      this.lines = Sheet.parseSheetText(s);
+      Sheet.applyStyle(this.lines, style);
       this.resetAfterLoad();
     }
 

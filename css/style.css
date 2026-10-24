@@ -71,7 +71,15 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 曲名をタップすると曲の一覧を開く */
+  background: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
 }
+.doc-title:hover { background: var(--hover); color: inherit; }
 
 .app-name { font-weight: 700; color: var(--accent); white-space: nowrap; }
 .app-name .version { font-weight: 400; color: var(--muted); font-size: 11px; }
@@ -363,3 +371,59 @@ button {
   .conflict { grid-template-columns: 1fr; }
 }
 .dlg-buttons button:disabled { opacity: 0.45; cursor: default; }
+
+/* ---- 曲の一覧 ---- */
+
+.toolbar .songs-btn { font-weight: 600; }
+.toolbar .bold-btn { min-width: 40px; }
+
+.dlg-body .song-search {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.dlg-body .song-count { margin: 6px 0; color: var(--muted); font-size: 12px; }
+.dlg-body .song-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.dlg-body .song {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding: 2px 4px;
+}
+.dlg-body .song:last-child { border-bottom: 0; }
+.dlg-body .song.current { background: #EAF1FF; }
+.dlg-body .song-open {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  font: inherit;
+  padding: 8px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dlg-body .song.current .song-open { font-weight: 600; color: var(--accent); }
+.dlg-body .song-open:hover { text-decoration: underline; }
+.dlg-body .song-tool {
+  font-size: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+.dlg-body .song-tool.danger { color: #C00000; }

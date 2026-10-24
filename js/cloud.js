@@ -112,8 +112,10 @@
 
   /**
    * 同期の係。hooks で画面とつなぐ。
-   *   snapshot()              … 同期する内容 { doc }
-   *   apply(data)             … 他の端末の内容を画面に入れる
+   *   snapshot()              … 同期する内容
+   *   merge(data)             … （曲の一覧の同期）他の端末の内容を合わせる。曲ごとに新しい方を残すので競合しない
+   *   compareKey(data)        … （merge と一緒に）同じ内容かを比べる文字列
+   *   apply(data)             … （merge がないとき）他の端末の内容を画面に入れる
    *   isEmpty()               … この端末にまだ何も書いていないか
    *   status(kind, text, detail) … 状態の表示（kind: off / busy / ok / error / conflict）
    *   resolve(remote, local)  … 競合したとき 'remote' / 'local' / null（あとで）を返す
@@ -207,6 +209,10 @@
       try {
         const { token, gistId } = this.meta;
         const remote = await readGist(token, gistId);
+        if (this.hooks.merge) {
+          await this.syncMerge(remote);
+          return;
+        }
         const local = JSON.stringify(this.hooks.snapshot());
         const dirty = local !== this.meta.synced;
         const remoteSnap = JSON.stringify({ doc: remote.doc });
@@ -245,6 +251,25 @@
           this.schedule();
         }
       }
+    }
+
+    /**
+     * 曲の一覧の同期：他の端末が書き換えていれば、まず合わせる（曲ごとに新しい方）。
+     * 合わせた結果が Gist と違えば（この端末にしかない変更があれば）書き込む
+     */
+    async syncMerge(remote) {
+      const key = this.hooks.compareKey;
+      if (remote.rev > this.meta.base) this.hooks.merge(remote);
+      const local = this.hooks.snapshot();
+      if (key(local) !== key(remote)) {
+        await this.write(Math.max(remote.rev, this.meta.base) + 1, key(local));
+      } else {
+        this.meta.base = Math.max(this.meta.base, remote.rev);
+        this.meta.synced = key(local);
+      }
+      this.saveMeta();
+      const t = new Date();
+      this.hooks.status('ok', `同期済み ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`, '');
     }
 
     async write(rev, localSnap) {

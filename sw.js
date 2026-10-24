@@ -7,7 +7,7 @@
 //
 // 公開し直すときは CACHE の番号と、js/app.js の APP_VERSION を同じ番号に上げる。
 
-const CACHE = 'lyriccode-v2';
+const CACHE = 'lyriccode-v3';
 const ASSETS = [
   './',
   'index.html',
@@ -18,6 +18,7 @@ const ASSETS = [
   'js/sheet.js',
   'js/ui.js',
   'js/editor.js',
+  'js/library.js',
   'js/pdfimport.js',
   'js/cloud.js',
   'js/app.js',
