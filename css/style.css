@@ -427,3 +427,25 @@ button {
   padding: 3px 8px;
 }
 .dlg-body .song-tool.danger { color: #C00000; }
+
+/* ---- 左右 2 列の分割位置を選んでいる間のバー ---- */
+
+.split-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+.split-bar[hidden] { display: none; }
+.split-bar .split-info { flex: 1; min-width: 200px; color: var(--accent); font-weight: 600; }
+.split-bar button {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 12px;
+  min-height: 32px;
+}
+.split-bar button.primary { background: var(--accent); border-color: var(--accent); color: #FFFFFF; }

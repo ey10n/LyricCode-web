@@ -6,7 +6,7 @@
   const { Editor, Text, UI, PdfImport, Sheet, Cloud, Library } = LC;
 
   /** 画面に出す版の番号。公開し直すときは sw.js の CACHE と同じ番号に上げる */
-  const APP_VERSION = 'v3';
+  const APP_VERSION = 'v4';
 
   const MODE_NAMES = { lyric: '歌詞編集', chord: 'コード編集', both: '歌詞＋コード編集', view: '閲覧' };
   const MODE_KEYS = ['lyric', 'chord', 'both', 'view'];
@@ -80,7 +80,7 @@
   function saveSettings() {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-        mode: editor.mode, freeText: editor.freeText, fontSize: editor.fontSize,
+        mode: editor.mode, freeText: editor.freeText, fontSize: editor.fontSize, splitEnabled: editor.splitEnabled,
       }));
     } catch (e) { /* 無視 */ }
   }
@@ -92,6 +92,7 @@
         if (MODE_KEYS.includes(st.mode)) editor.mode = st.mode;
         editor.freeText = !!st.freeText;
         if (st.fontSize) editor.fontSize = st.fontSize;
+        if (st.splitEnabled === false) editor.splitEnabled = false;
       }
     } catch (e) { /* 無視 */ }
     // 前の版の書きかけの 1 曲を、曲の一覧の最初の曲にする
@@ -115,7 +116,10 @@
     currentId = id;
     library.currentId = id;
     fileHandle = null;
+    editor.choosingSplit = false;
     editor.setSheetText(s.text, s.style);
+    editor.splitStart = s.splitLine ?? null;
+    updateSplitBar();
     // 開いただけで「変わった」ことにならないよう、読み直した形をそのまま覚えておく（更新日時は変えない）
     s.text = editor.getSheetText(true);
     s.style = editor.getStyle();
@@ -137,6 +141,46 @@
     if (cloud) cloud.schedule();
   };
   editor.onStatus = updateStatus;
+
+  // ---- 左右 2 列の閲覧の分割位置（曲ごとに覚える。iPad のアプリ版と同じ） ----
+
+  const splitBar = document.getElementById('splitBar');
+
+  editor.onSplitChange = (k) => {
+    library.update(currentId, { splitLine: k });
+    if (cloud) cloud.schedule();
+    updateSplitBar();
+  };
+
+  function updateSplitBar() {
+    if (editor.choosingSplit && !editor.twoColumn) editor.choosingSplit = false;
+    splitBar.hidden = !editor.choosingSplit;
+    if (!splitBar.hidden) {
+      splitBar.querySelector('.split-info').textContent =
+        `右の列は ${editor.splitAt() + 1} 行目から${editor.splitStart == null ? '（自動）' : ''}。右の列の先頭にしたい行をタップしてください`;
+    }
+  }
+
+  function chooseSplit() {
+    if (!editor.twoColumn) {
+      UI.message('分割位置を変える', '左右 2 列になるのは、閲覧モードで画面が横長のときです（iPad は横向きにしてください）。');
+      return;
+    }
+    editor.choosingSplit = true;
+    updateSplitBar();
+  }
+
+  splitBar.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const k = editor.splitAt();
+    if (b.dataset.split === 'less') editor.setSplit(k - 1);
+    else if (b.dataset.split === 'more') editor.setSplit(k + 1);
+    else if (b.dataset.split === 'auto') editor.setSplit(null);
+    else if (b.dataset.split === 'done') editor.choosingSplit = false;
+    updateSplitBar();
+  });
+  window.addEventListener('resize', () => setTimeout(updateSplitBar, 100));
 
   // ---- 他の端末との同期（GitHub の非公開の Gist。Lyricker と同じ方式） ----
 
@@ -175,6 +219,7 @@
       const s = library.get(currentId);
       if (s) {
         editor.setSheetText(s.text, s.style);
+        editor.splitStart = s.splitLine ?? null;
         editor.setModified(false);
         statusEl.textContent = '他の端末で変更された「' + s.name + '」を読み込みました';
       } else {
@@ -514,6 +559,7 @@
             if (x && typeof x.text === 'string') {
               entries.push({
                 name: String(x.name || '無題').normalize('NFC'), text: x.text,
+                splitLine: Number.isInteger(x.splitLine) ? x.splitLine : null,
                 style: { blinking: x.blinking || [], chordColors: x.chordColors || [], boldLyrics: x.boldLyrics || [] },
               });
             }
@@ -558,12 +604,14 @@
       const text = Sheet.getSheetText(lines, true), style = Sheet.getStyle(lines);
       const same = library.findByName(e.name);
       if (same && how === 'skip') continue;
+      const extra = e.splitLine != null ? { splitLine: e.splitLine } : {};
       if (same && how === 'replace') {
-        library.update(same.id, { text, style });
+        library.update(same.id, { text, style, splitLine: e.splitLine ?? null });
         replaced++;
         firstId = firstId || same.id;
       } else {
         const s = library.add(e.name, text, style);
+        if (e.splitLine != null) library.update(s.id, extra);
         added++;
         firstId = firstId || s.id;
       }
@@ -678,6 +726,7 @@
 
   function setMode(m) {
     editor.mode = m;
+    updateSplitBar();
     updateToolbar();
     updateStatus();
     saveSettings();
@@ -699,6 +748,12 @@
       statusEl.textContent = '歌詞のない行は太字にできません';
     }
     editor.focusEditor();
+  }
+
+  function toggleSplit() {
+    editor.splitEnabled = !editor.splitEnabled;
+    saveSettings();
+    updateSplitBar();
   }
 
   function zoom(d) {
@@ -749,6 +804,10 @@
       '<p>アプリ版の「…」→「Web 版へ書き出す」で、全曲（点滅・色・太字も）が「ファイル」の「この iPad 内 › LyricCode › Web版へ」に書き出されます。' +
       'ここで「曲の一覧」→「取り込む...」を押してそのファイル（LyricCode 全曲.json）を選ぶと、全曲が曲の一覧に入ります。' +
       '.lct・.txt のファイルも、いくつでもまとめて選んで取り込めます。</p>' +
+      '<h3>左右 2 列（閲覧・横長の画面）</h3>' +
+      '<p>閲覧モードで画面が横長のとき（iPad を横向きにしたときなど）は、左の列から右の列へ続けて表示します。' +
+      '「表示」→「分割位置を変える...」で、右の列の先頭にする行をタップして選べます（曲ごとに覚えます）。' +
+      '「表示」→「左右 2 列」で、2 列にしないこともできます。</p>' +
       '<h3>ファイル</h3>' +
       '<p>保存形式（.lct）は Windows 版の LyricCode と同じです。「ファイルを開く」で開いたファイルは曲の一覧に加わります。' +
       '「ファイルに保存」は開いている曲を .lct として書き出します（Safari など、ファイルを直接上書きできないブラウザではダウンロードになります）。' +
@@ -823,6 +882,9 @@
       label: MODE_NAMES[m], shortcut: 'Alt+' + (i + 1), checked: editor.mode === m, onClick: () => setMode(m),
     })),
     view: () => [
+      { label: '左右 2 列（横長の画面の閲覧）', checked: editor.splitEnabled, onClick: toggleSplit },
+      { label: '分割位置を変える...', disabled: !editor.twoColumn, onClick: chooseSplit },
+      '-',
       { label: '拡大', shortcut: CTRL + '+', cmd: 'zoomIn' },
       { label: '縮小', shortcut: CTRL + '-', cmd: 'zoomOut' },
       { label: '標準サイズ', shortcut: CTRL + '0', cmd: 'zoomReset' },

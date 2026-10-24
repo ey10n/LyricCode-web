@@ -55,6 +55,14 @@
 
   <main id="editorHost" class="editor-host"></main>
 
+  <div id="splitBar" class="split-bar" hidden>
+    <span class="split-info"></span>
+    <button type="button" data-split="less">左を 1 行減らす</button>
+    <button type="button" data-split="more">左を 1 行増やす</button>
+    <button type="button" data-split="auto">自動</button>
+    <button type="button" data-split="done" class="primary">完了</button>
+  </div>
+
   <footer class="statusbar" id="status" aria-live="polite"></footer>
 
   <input type="file" id="openInput" accept=".lct,.txt,text/plain" hidden>

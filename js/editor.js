@@ -14,6 +14,8 @@
   const EXTRA_LINES_BELOW = 3;
   const DEFAULT_FONT_SIZE = 14;
   const LONG_PRESS_MS = 600;
+  /** 左右 2 列の閲覧の、列の間の幅 */
+  const COLUMN_GAP = 28;
 
   const UK_NONE = 0, UK_TYPING = 1, UK_OTHER = 2, UK_DELETE = 3, UK_MOVE = 4;
 
@@ -31,6 +33,8 @@
     gutterLine: '#D8D8D8',
     gutterText: '#808080',
     caret: '#000000',
+    splitMark: '#2B4A8A',
+    splitMarkFill: 'rgba(43, 74, 138, 0.12)',
   };
 
   /** コードの色（iPad のアプリ版と同じ名前と色。白地で読める濃さ）。標準（色なし）は COLOR.chord */
@@ -143,6 +147,11 @@
       this.focused = false; this.composing = false; this.cancelComposition = false;
       this.suppressScrollHover = false;
       this.onChange = null; this.onStatus = null; this.onPaste = null;
+      // 左右 2 列の閲覧（横長の画面の閲覧で、左の列から右の列へ続ける。iPad のアプリ版と同じ）
+      this._splitEnabled = true;
+      this._splitLine = null;     // 右の列の先頭の行（null は自動）
+      this._choosingSplit = false; // 分割位置をタップで選んでいるところ
+      this.onSplitChange = null;
 
       this.updateMetrics();
       this.attachEvents();
@@ -172,10 +181,65 @@
       this.lastUndoKind = UK_NONE;
       if (v !== 'both') this.mouseOnChordRow = false;
       this.scroller.classList.toggle('view', v === 'view');
+      if (v !== 'view') this._choosingSplit = false;
+      this.updateContentSize();
       this.applyFocus(false);
       this.updateImeAnchor();
       this.invalidate();
       this.doStatus();
+    }
+
+    get splitEnabled() { return this._splitEnabled; }
+    set splitEnabled(v) { this._splitEnabled = !!v; this.relayout(); }
+
+    get splitStart() { return this._splitLine; }
+    set splitStart(v) {
+      this._splitLine = v == null ? null : Math.max(1, Math.round(v));
+      this.relayout();
+    }
+
+    get choosingSplit() { return this._choosingSplit; }
+    set choosingSplit(v) { this._choosingSplit = !!v && this.twoColumn; this.invalidate(); }
+
+    /** 今、左右 2 列で見せているか（閲覧で、画面が横長で、2 行以上あるとき） */
+    get twoColumn() {
+      return this._splitEnabled && this._mode === 'view' && this.lines.length >= 2 &&
+        this.host.clientWidth > this.host.clientHeight;
+    }
+
+    /** 自動の分割位置：真ん中の近くの空行の次（なければ真ん中）。アプリ版の autoSplitLine と同じ */
+    autoSplitLine() {
+      const n = this.lines.length;
+      if (n < 2) return n;
+      const half = Math.floor((n + 1) / 2);
+      const blank = (i) => this.lines[i].text.trim() === '' && this.lines[i].chords.length === 0;
+      for (let d = 0; d <= Math.max(1, Math.floor(n / 6)); d++) {
+        for (const i of [half - 1 - d, half - 1 + d]) {
+          if (i > 0 && i < n - 1 && blank(i)) return i + 1;
+        }
+      }
+      return half;
+    }
+
+    /** 右の列の先頭の行（1～行数-1） */
+    splitAt() {
+      const n = this.lines.length;
+      if (n < 2) return n;
+      return Math.min(Math.max(1, this._splitLine ?? this.autoSplitLine()), n - 1);
+    }
+
+    /** 分割位置を変える（選んでいる間のボタン・タップから）。null で自動 */
+    setSplit(v) {
+      const k = v == null ? null : Math.min(Math.max(1, v), Math.max(1, this.lines.length - 1));
+      if (k === this._splitLine) return;
+      this.splitStart = k;
+      if (this.onSplitChange) this.onSplitChange(k);
+    }
+
+    relayout() {
+      if (!this._choosingSplit || this.twoColumn) { /* そのまま */ } else this._choosingSplit = false;
+      this.updateContentSize();
+      this.invalidate();
     }
 
     get freeText() { return this._freeText; }
@@ -243,6 +307,15 @@
     }
 
     updateContentSize() {
+      if (this.twoColumn) {
+        // 2 列のときは横にはスクロールしない。高さは長い方の列に合わせる
+        const k = this.splitAt();
+        this.contentW = this.viewW;
+        this.contentH = TOP_MARGIN * 2 + Math.max(k, this.lines.length - k) * this.lineH + this.lineH;
+        this.spacer.style.width = '1px';
+        this.spacer.style.height = Math.ceil(this.contentH) + 'px';
+        return;
+      }
       let maxC = 0;
       for (const sl of this.lines) {
         let c = Text.allCells(sl.text);
@@ -485,6 +558,7 @@
       const lyricModes = this._mode === 'lyric' || this._mode === 'both';
       const showTarget = this.chordTargetShown();
       const showCaret = this.focused && this.lyricCaretActive() && this.caretOn && !this.composing;
+      if (this.twoColumn) { this.drawTwoColumns(w, h); return; }
       const first = Math.max(0, Math.floor((this.topY - TOP_MARGIN) / this.lineH));
       const lastVirt = Math.floor((this.topY + this.viewH - TOP_MARGIN) / this.lineH) + 1;
       const last = Math.min(this.lines.length - 1, lastVirt);
@@ -521,40 +595,97 @@
         }
         if (!sl) continue;
 
-        ctx.font = this.chordFont;
-        for (const c of sl.chords) {
-          // 点滅させるコードは消えている間、閲覧では見えなくし、編集中は薄く残す（どこにあるか分かるように）
-          if (c.blink && !this.blinkOn) {
-            if (this._mode === 'view') continue;
-            ctx.globalAlpha = 0.25;
-          }
-          ctx.fillStyle = chordColorCss(c.color);
-          ctx.fillText(c.name, xo + c.col * this.cellW, y + 1);
-          ctx.globalAlpha = 1;
-        }
-
-        ctx.fillStyle = COLOR.lyric;
-        const t = sl.text;
-        let x = xo;
-        for (let j = 0; j < t.length;) {
-          const cells = Text.charCells(t.charCodeAt(j));
-          const bold = sl.bold.has(j);
-          let s;
-          if (j + 1 < t.length && Text.isLowSur(t.charCodeAt(j + 1))) { s = t.substr(j, 2); j += 2; } else { s = t[j]; j++; }
-          if (s !== ' ' && x + cells * this.cellW > this.gutterW && x < w) {
-            ctx.font = bold ? this.lyricBoldFont : this.lyricFont;
-            ctx.fillText(s, x, y + this.chordH + 3);
-          }
-          x += cells * this.cellW;
-        }
+        this.drawLineContent(sl, xo, y, this.gutterW, w);
 
         if (showCaret && i === this.caretLine) {
           ctx.fillStyle = COLOR.caret;
-          const cx = xo + Text.textCells(t, this.caretIdx) * this.cellW;
+          const cx = xo + Text.textCells(sl.text, this.caretIdx) * this.cellW;
           ctx.fillRect(cx - 1, y + this.chordH + 2, 2, this.lyricH - 3);
         }
       }
+      this.drawGutter(first, last, h);
+    }
 
+    // 1 行分のコードと歌詞を描く（xo: 歌詞の左端、y: 行の上端、left・right: 描く範囲）
+    drawLineContent(sl, xo, y, left, right) {
+      const ctx = this.ctx;
+      ctx.font = this.chordFont;
+      for (const c of sl.chords) {
+        // 点滅させるコードは消えている間、閲覧では見えなくし、編集中は薄く残す（どこにあるか分かるように）
+        if (c.blink && !this.blinkOn) {
+          if (this._mode === 'view') continue;
+          ctx.globalAlpha = 0.25;
+        }
+        ctx.fillStyle = chordColorCss(c.color);
+        ctx.fillText(c.name, xo + c.col * this.cellW, y + 1);
+        ctx.globalAlpha = 1;
+      }
+
+      ctx.fillStyle = COLOR.lyric;
+      const t = sl.text;
+      let x = xo;
+      for (let j = 0; j < t.length;) {
+        const cells = Text.charCells(t.charCodeAt(j));
+        const bold = sl.bold.has(j);
+        let s;
+        if (j + 1 < t.length && Text.isLowSur(t.charCodeAt(j + 1))) { s = t.substr(j, 2); j += 2; } else { s = t[j]; j++; }
+        if (s !== ' ' && x + cells * this.cellW > left && x < right) {
+          ctx.font = bold ? this.lyricBoldFont : this.lyricFont;
+          ctx.fillText(s, x, y + this.chordH + 3);
+        }
+        x += cells * this.cellW;
+      }
+    }
+
+    // 左右 2 列の閲覧：左の列に先頭から、右の列に分割位置から描く（行番号は出さない）
+    drawTwoColumns(w, h) {
+      const ctx = this.ctx;
+      const k = this.splitAt();
+      const colW = (w - COLUMN_GAP) / 2;
+      const cols = [{ from: 0, to: k, x: 0 }, { from: k, to: this.lines.length, x: colW + COLUMN_GAP }];
+      for (const col of cols) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(col.x, 0, colW, h);
+        ctx.clip();
+        for (let i = col.from; i < col.to; i++) {
+          const y = TOP_MARGIN + (i - col.from) * this.lineH - this.topY;
+          if (y + this.lineH < 0 || y > h) continue;
+          if (this._choosingSplit && i === k) {
+            ctx.fillStyle = COLOR.splitMarkFill;
+            ctx.fillRect(col.x, y, colW, this.lineH);
+            ctx.fillStyle = COLOR.splitMark;
+            ctx.fillRect(col.x, y, colW, 3);
+          }
+          this.drawLineContent(this.lines[i], col.x + LEFT_PAD, y, col.x, col.x + colW);
+          if (this._choosingSplit && i === k) {
+            ctx.font = this.gutterFont;
+            ctx.textAlign = 'right';
+            ctx.fillStyle = COLOR.splitMark;
+            ctx.fillText('ここから右の列', col.x + colW - 8, y + 6);
+            ctx.textAlign = 'left';
+          }
+        }
+        ctx.restore();
+      }
+      ctx.fillStyle = COLOR.gutterLine;
+      ctx.fillRect(Math.round(colW + COLUMN_GAP / 2), 0, 1, h);
+    }
+
+    /** 2 列のとき、画面の位置 (x, y) にある行（なければ -1） */
+    twoColumnLineAt(x, y) {
+      const k = this.splitAt();
+      const colW = (this.host.clientWidth - COLUMN_GAP) / 2;
+      const right = x > colW + COLUMN_GAP / 2;
+      const row = Math.floor((y + this.topY - TOP_MARGIN) / this.lineH);
+      if (row < 0) return -1;
+      const i = (right ? k : 0) + row;
+      if (right ? i >= this.lines.length : i >= k) return -1;
+      return i;
+    }
+
+    drawGutter(first, last, h) {
+      const ctx = this.ctx;
       // 行番号
       ctx.fillStyle = COLOR.gutter;
       ctx.fillRect(0, 0, this.gutterW, h);
@@ -675,6 +806,12 @@
           clearTimeout(this.longPressTimer);
           this.longPressTimer = setTimeout(() => this.onLongPress(), LONG_PRESS_MS);
         }
+      }
+      if (this._mode === 'view' && this._choosingSplit && e.button === 0) {
+        // タップした行を右の列の先頭にする（左の列の先頭の行は選べない）
+        const i = this.twoColumnLineAt(x, y);
+        if (i >= 0) this.setSplit(Math.max(1, i));
+        return;
       }
       if (this._mode === 'view') {
         this.panCandidate = e.button === 0 && e.pointerType === 'mouse';
