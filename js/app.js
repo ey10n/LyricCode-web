@@ -6,7 +6,7 @@
   const { Editor, Text, UI, PdfImport, Sheet, Cloud, Library, ChordPalette } = LC;
 
   /** 画面に出す版の番号。公開し直すときは sw.js の CACHE と同じ番号に上げる */
-  const APP_VERSION = 'v10';
+  const APP_VERSION = 'v11';
 
   const MODE_NAMES = { lyric: '歌詞編集', chord: 'コード編集', both: '歌詞＋コード編集', view: '閲覧' };
   const MODE_KEYS = ['lyric', 'chord', 'both', 'view'];
@@ -911,7 +911,7 @@
     if (e.target.closest('button')) e.preventDefault();
   });
 
-  // 閲覧中の左右のスワイプで前後の曲へ。1 曲目で左から右へスワイプするとプレイリストの曲順に戻る（アプリ版と同じ）
+  // 閲覧中の左右のスワイプで前後の曲へ（1 曲目で左から右へスワイプしても何もしない）
   (() => {
     const host = document.getElementById('editorHost');
     let sx = 0, sy = 0, single = false;
@@ -926,8 +926,7 @@
       const dx = t.clientX - sx, dy = t.clientY - sy;
       if (Math.abs(dx) <= 100 || Math.abs(dx) <= Math.abs(dy) * 2) return;
       if (dx < 0) playStep(1);
-      else if (playing.index > 0) playStep(-1);
-      else stopPlaylist(true);
+      else playStep(-1);   // 1 曲目では何もしない（曲順の一覧には「‹ 曲順」で戻る）
     }, { passive: true });
   })();
 
@@ -1376,7 +1375,7 @@
       '<p>演奏する順に曲を並べておき、閲覧で 1 曲ずつ表示します（iPad のアプリ版と同じ）。' +
       '「新しいプレイリスト」で作り、「曲を追加」で曲を選んだ順に足します（曲の一覧の「＋」でも足せます）。▲▼で並べ替え、「外す」でプレイリストから外します（曲そのものは消えません）。' +
       '「▶ 最初から表示」か曲をタップすると、上の帯に「曲名（2/10）」が出て、◀▶・左右のスワイプ・←→ キーで前後の曲に移れます。' +
-      '「‹ 曲順」（1 曲目で左から右へスワイプ・Esc）で曲順に戻ります。プレイリストも他の端末と同期します。</p>' +
+      '「‹ 曲順」（Esc）で曲順に戻ります。プレイリストも他の端末と同期します。</p>' +
       '<h3>iPad のアプリ版からの引っ越し</h3>' +
       '<p>アプリ版の「…」→「Web 版へ書き出す」で、全曲（点滅・色・太字も）が「ファイル」の「この iPad 内 › LyricCode › Web版へ」に書き出されます。' +
       'ここで「曲の一覧」→「取り込む...」を押してそのファイル（LyricCode 全曲.json）を選ぶと、全曲が曲の一覧に入ります。' +
