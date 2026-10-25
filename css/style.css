@@ -719,3 +719,27 @@ body.playing .toolbar { display: none; }
   resize: vertical;
 }
 .dlg-body .hint { color: var(--muted); font-size: 12px; margin: 0 0 4px; }
+
+/* ---- 閲覧中：ツールバーを詰めて 1 列にし、譜面を広く見せる ---- */
+
+body.viewing .toolbar {
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 3px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+body.viewing .toolbar::-webkit-scrollbar { display: none; }
+body.viewing .toolbar button {
+  min-height: 30px;
+  padding: 2px 7px;
+  font-size: 13px;
+}
+body.viewing .toolbar .zoom .font-size { min-width: 1.8em; font-size: 12px; }
+/* 自由文字と太字は閲覧中は使えないので隠す。ステータスバーも隠す */
+body.viewing #freeTextBtn,
+body.viewing .toolbar .bold-btn,
+body.viewing .statusbar { display: none; }
+@media (pointer: coarse) {
+  body.viewing .toolbar button { min-height: 34px; padding: 2px 8px; }
+}

@@ -6,7 +6,7 @@
   const { Editor, Text, UI, PdfImport, Sheet, Cloud, Library, ChordPalette } = LC;
 
   /** 画面に出す版の番号。公開し直すときは sw.js の CACHE と同じ番号に上げる */
-  const APP_VERSION = 'v8';
+  const APP_VERSION = 'v9';
 
   const MODE_NAMES = { lyric: '歌詞編集', chord: 'コード編集', both: '歌詞＋コード編集', view: '閲覧' };
   const MODE_KEYS = ['lyric', 'chord', 'both', 'view'];
@@ -71,6 +71,8 @@
     });
     freeTextBtn.setAttribute('aria-pressed', String(editor.freeText));
     document.querySelectorAll('.font-size').forEach((s) => { s.textContent = String(editor.fontSize); });
+    // 閲覧中はツールバーを詰めて 1 列にし、譜面を広く見せる
+    document.body.classList.toggle('viewing', editor.mode === 'view');
     palette.refresh();
   }
 
