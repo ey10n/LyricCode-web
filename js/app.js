@@ -6,7 +6,7 @@
   const { Editor, Text, UI, PdfImport, Sheet, Cloud, Library, ChordPalette } = LC;
 
   /** 画面に出す版の番号。公開し直すときは sw.js の CACHE と同じ番号に上げる */
-  const APP_VERSION = 'v9';
+  const APP_VERSION = 'v10';
 
   const MODE_NAMES = { lyric: '歌詞編集', chord: 'コード編集', both: '歌詞＋コード編集', view: '閲覧' };
   const MODE_KEYS = ['lyric', 'chord', 'both', 'view'];
@@ -292,6 +292,11 @@
         editor.splitStart = s.splitLine ?? null;
         editor.setModified(false);
         statusEl.textContent = '他の端末で変更された「' + s.name + '」を読み込みました';
+      } else if (library.mergedIds && library.get(library.mergedIds.get(currentId))) {
+        // 同じ名前の曲を 1 曲にまとめた：残した方を開く
+        const keep = library.mergedIds.get(currentId);
+        currentId = '';
+        openSong(keep);
       } else {
         const next = library.list()[0];
         currentId = '';

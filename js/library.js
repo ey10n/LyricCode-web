@@ -46,6 +46,40 @@
           .concat(this.playlists.filter((p) => p && p.id));
         this.save();
       }
+      const merged = this.dedupeByName();
+      if (merged.has(this.currentId)) this.currentId = merged.get(this.currentId);
+      if (merged.size) this.save();
+    }
+
+    /**
+     * 同じ名前の曲が 2 曲以上あれば、新しい方（updatedAt が新しい方。同じなら id の大きい方）を 1 曲だけ残す。
+     * 2 つの端末で同じファイルを別々に取り込むと、同期で同じ曲が 2 曲ずつになるため。
+     * 消した曲は削除の印にして他の端末にも伝え、プレイリストの中の曲は残した曲に付け替える。
+     * 戻り値は「消した曲の id → 残した曲の id」
+     */
+    dedupeByName() {
+      const groups = new Map();
+      for (const s of this.songs) {
+        if (s.deleted || typeof s.name !== 'string') continue;
+        const k = s.name.normalize('NFC');
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(s);
+      }
+      const merged = new Map();
+      for (const list of groups.values()) {
+        if (list.length < 2) continue;
+        list.sort((a, b) => ((b.updatedAt || '') > (a.updatedAt || '') ? 1 : (b.updatedAt || '') < (a.updatedAt || '') ? -1 :
+          (b.id > a.id ? 1 : -1)));
+        for (const s of list.slice(1)) merged.set(s.id, list[0].id);
+      }
+      if (!merged.size) return merged;
+      this.songs = this.songs.map((s) => (merged.has(s.id) ? { id: s.id, deleted: true, updatedAt: now() } : s));
+      for (const p of this.playlistList()) {
+        if (p.songs.some((e) => merged.has(e))) {
+          this.updatePlaylist(p.id, (q) => { q.songs = q.songs.map((e) => merged.get(e) || e); });
+        }
+      }
+      return merged;
     }
 
     save() {
@@ -261,6 +295,10 @@
           }
         }
       }
+      // 他の端末で別々に取り込んだ同じ曲は 1 曲にまとめる（消した曲 → 残した曲を mergedIds に覚える）
+      this.mergedIds = this.dedupeByName();
+      for (const id of this.mergedIds.keys()) if (!changed.includes(id)) changed.push(id);
+      if (this.mergedIds.size) playlistsChanged = true;
       if (changed.length || playlistsChanged) this.save();
       this.playlistsChanged = playlistsChanged;
       return changed;
